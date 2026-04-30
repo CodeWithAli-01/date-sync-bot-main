@@ -9,6 +9,7 @@ export interface PdfRow {
   code: string | null; // employee code if detectable
   name: string;
   count: number;
+  calls: number | null;
 }
 
 export interface PdfParseResult {
@@ -38,6 +39,12 @@ function extractSelfieCount(text: string): number | null {
   const m1 = lower.match(/(\d+)\s*selfies?\b/);
   if (m1) return parseInt(m1[1], 10);
   return null;
+}
+
+function extractCallsCount(text: string): number | null {
+  const lower = text.toLowerCase();
+  const m = lower.match(/(\d+)\s*calls?\b/);
+  return m ? parseInt(m[1], 10) : null;
 }
 
 // Detect a leading employee code on a row. Common patterns:
@@ -105,6 +112,7 @@ export async function parsePdf(file: File): Promise<PdfParseResult> {
 
     const count = extractSelfieCount(line);
     if (count === null) continue;
+    const calls = extractCallsCount(line);
 
     // Try same-line: "<code?> <name> ... <n> selfies"
     let name = "";
@@ -136,7 +144,7 @@ export async function parsePdf(file: File): Promise<PdfParseResult> {
     if (seen.has(key)) continue;
     seen.add(key);
 
-    rows.push({ code, name, count });
+    rows.push({ code, name, count, calls });
   }
 
   return { date, day, fileName: file.name, fileHash, rows, rawText };

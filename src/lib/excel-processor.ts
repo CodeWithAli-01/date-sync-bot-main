@@ -1,5 +1,5 @@
-// Read the Active Members workbook and update only the date/total cells needed.
-// Employee rows and existing columns are preserved exactly as supplied.
+// Read the Active Members workbook and update only the pharma report cells needed.
+// Employee rows and source fields such as City/Designation are preserved.
 import ExcelJS from "exceljs";
 import type { PdfParseResult } from "./pdf-extractor";
 
@@ -20,6 +20,10 @@ export interface ProcessReport {
 
 const NAME_HINTS = ["employee name", "employee", "name", "emp name", "staff name", "member name"];
 const CODE_HINTS = ["employee code", "emp code", "code", "emp id", "employee id", "id"];
+const REGION_HINTS = ["region", "zone", "area"];
+const CITY_HINTS = ["city", "town", "territory", "headquarter", "hq"];
+const DESIGNATION_HINTS = ["designation", "desig", "position", "title"];
+const SPECIAL_TEXT = ["meeting", "new joining", "resigned"];
 
 function normalize(s: string): string {
   return (s ?? "").toString().replace(/\s+/g, " ").trim().toLowerCase();
@@ -53,6 +57,9 @@ interface DetectedSheet {
   headerRow: number;
   nameCol: number;
   codeCol: number | null;
+  regionCol: number | null;
+  cityCol: number | null;
+  designationCol: number | null;
   dataStartRow: number;
   dataEndRow: number;
 }
@@ -65,50 +72,14 @@ interface Emp {
   fuzzy: string;
 }
 
-function detectActiveSheet(wb: ExcelJS.Workbook): DetectedSheet {
-  for (const ws of wb.worksheets) {
-    const maxScan = Math.min(10, ws.rowCount || 10);
-    for (let r = 1; r <= maxScan; r++) {
-      const row = ws.getRow(r);
-      if (!row.cellCount) continue;
-      let nameCol = 0;
-      let codeCol = 0;
-      const maxC = Math.max(row.cellCount || 0, 30);
-      for (let c = 1; c <= maxC; c++) {
-        const v = normalize(cellText(row.getCell(c)));
-        if (!v) continue;
-        if (!nameCol && (NAME_HINTS.includes(v) || (v.includes("name") && !v.includes("file"))))
-          nameCol = c;
-        if (!codeCol && (CODE_HINTS.includes(v) || /\bcode\b/.test(v) || /\bemp.*id\b/.test(v)))
-          codeCol = c;
-      }
-      if (nameCol) {
-        let hasValues = 0;
-        for (let rr = r + 1; rr <= Math.min(r + 50, ws.rowCount || r + 50); rr++) {
-          if (cellText(ws.getRow(rr).getCell(nameCol)).trim()) hasValues++;
-        }
-        if (hasValues >= 1) {
-          return {
-            ws,
-            headerRow: r,
-            nameCol,
-            codeCol: codeCol || null,
-            dataStartRow: r + 1,
-            dataEndRow: ws.rowCount || r + 1,
-          };
-        }
-      }
-    }
-  }
-  const ws = wb.worksheets[0];
-  return {
-    ws,
-    headerRow: 1,
-    nameCol: 1,
-    codeCol: null,
-    dataStartRow: 2,
-    dataEndRow: ws.rowCount || 2,
-  };
+interface DatePairCols {
+  selfiesCol: number;
+  callsCol: number;
+}
+
+interface MatchValue {
+  selfies: number;
+  calls: number | null;
 }
 
 function cellText(cell: ExcelJS.Cell): string {
@@ -125,77 +96,68 @@ function cellText(cell: ExcelJS.Cell): string {
   return String(value);
 }
 
-function headerDay(cell: ExcelJS.Cell): number | null {
-  const value = cell.value;
-  if (typeof value === "number" && value >= 1 && value <= 31) return value;
-  if (value instanceof Date) return value.getDate();
-  const text = cellText(cell).trim();
-  const n = Number(text);
-  if (Number.isInteger(n) && n >= 1 && n <= 31) return n;
-  const iso = text.match(/^\d{4}-\d{2}-(\d{2})$/);
-  return iso ? Number(iso[1]) : null;
-}
+function detectActiveSheet(wb: ExcelJS.Workbook): DetectedSheet {
+  for (const ws of wb.worksheets) {
+    const maxScan = Math.min(10, ws.rowCount || 10);
+    for (let r = 1; r <= maxScan; r++) {
+      const row = ws.getRow(r);
+      if (!row.cellCount) continue;
 
-function findLastUsedColumn(ws: ExcelJS.Worksheet): number {
-  let last = 0;
-  ws.eachRow((row) => {
-    row.eachCell({ includeEmpty: false }, (cell, col) => {
-      if (cell.value != null && cellText(cell).trim() !== "") last = Math.max(last, col);
-    });
-  });
-  return Math.max(last, ws.actualColumnCount || 0, 1);
-}
+      let nameCol = 0;
+      let codeCol = 0;
+      let regionCol = 0;
+      let cityCol = 0;
+      let designationCol = 0;
 
-function findOrCreateDateColumns(
-  ws: ExcelJS.Worksheet,
-  headerRow: number,
-  days: number[],
-  dayMap: Map<number, string>,
-): Map<number, number> {
-  const header = ws.getRow(headerRow);
-  const dayCols = new Map<number, number>();
-  const lastUsed = findLastUsedColumn(ws);
+      const maxC = Math.max(row.cellCount || 0, 40);
+      for (let c = 1; c <= maxC; c++) {
+        const v = normalize(cellText(row.getCell(c)));
+        if (!v) continue;
+        if (!regionCol && REGION_HINTS.includes(v)) regionCol = c;
+        if (!codeCol && (CODE_HINTS.includes(v) || /\bcode\b/.test(v) || /\bemp.*id\b/.test(v))) {
+          codeCol = c;
+        }
+        if (!nameCol && (NAME_HINTS.includes(v) || (v.includes("name") && !v.includes("file")))) {
+          nameCol = c;
+        }
+        if (!cityCol && CITY_HINTS.includes(v)) cityCol = c;
+        if (!designationCol && DESIGNATION_HINTS.includes(v)) designationCol = c;
+      }
 
-  for (let c = 1; c <= Math.max(lastUsed, header.cellCount || 0); c++) {
-    const day = headerDay(header.getCell(c));
-    if (day != null && !dayCols.has(day)) dayCols.set(day, c);
+      if (!nameCol) continue;
+
+      let hasValues = 0;
+      for (let rr = r + 1; rr <= Math.min(r + 50, ws.rowCount || r + 50); rr++) {
+        if (cellText(ws.getRow(rr).getCell(nameCol)).trim()) hasValues++;
+      }
+      if (hasValues >= 1) {
+        return {
+          ws,
+          headerRow: r,
+          nameCol,
+          codeCol: codeCol || null,
+          regionCol: regionCol || null,
+          cityCol: cityCol || null,
+          designationCol: designationCol || null,
+          dataStartRow: r + 1,
+          dataEndRow: ws.rowCount || r + 1,
+        };
+      }
+    }
   }
 
-  let nextCol = lastUsed + 1;
-  for (const day of days) {
-    if (dayCols.has(day)) continue;
-    const cell = header.getCell(nextCol);
-    cell.value = day;
-    cell.note = dayMap.get(day) ?? "";
-    styleDateHeader(cell);
-    dayCols.set(day, nextCol);
-    ws.getColumn(nextCol).width = 6;
-    nextCol++;
-  }
-
-  header.height = Math.max(header.height || 0, 24);
-  header.commit?.();
-  return dayCols;
-}
-
-function findOrCreateTotalColumn(
-  ws: ExcelJS.Worksheet,
-  headerRow: number,
-  afterCol: number,
-): number {
-  const header = ws.getRow(headerRow);
-  const lastUsed = findLastUsedColumn(ws);
-  for (let c = 1; c <= Math.max(lastUsed, header.cellCount || 0); c++) {
-    if (normalize(cellText(header.getCell(c))) === "total") return c;
-  }
-
-  const totalCol = Math.max(afterCol + 1, lastUsed + 1);
-  const cell = header.getCell(totalCol);
-  cell.value = "Total";
-  styleTotalHeader(cell);
-  ws.getColumn(totalCol).width = 10;
-  header.commit?.();
-  return totalCol;
+  const ws = wb.worksheets[0];
+  return {
+    ws,
+    headerRow: 1,
+    nameCol: 3,
+    codeCol: 2,
+    regionCol: 1,
+    cityCol: 4,
+    designationCol: 5,
+    dataStartRow: 2,
+    dataEndRow: ws.rowCount || 2,
+  };
 }
 
 function readEmployees(ws: ExcelJS.Worksheet, det: DetectedSheet): Emp[] {
@@ -225,6 +187,84 @@ function readEmployees(ws: ExcelJS.Worksheet, det: DetectedSheet): Emp[] {
   return employees;
 }
 
+function findLastUsedColumn(ws: ExcelJS.Worksheet): number {
+  let last = 0;
+  ws.eachRow((row) => {
+    row.eachCell({ includeEmpty: false }, (cell, col) => {
+      if (cell.value != null && cellText(cell).trim() !== "") last = Math.max(last, col);
+    });
+  });
+  return Math.max(last, ws.actualColumnCount || 0, 1);
+}
+
+function dateLabel(date: string): string {
+  const parsed = new Date(`${date}T00:00:00`);
+  const month = parsed.toLocaleString("en-US", { month: "short" });
+  return `${parsed.getDate()}-${month}`;
+}
+
+function findDatePairColumns(
+  ws: ExcelJS.Worksheet,
+  headerRow: number,
+  dates: string[],
+): Map<string, DatePairCols> {
+  const header = ws.getRow(headerRow);
+  const pairs = new Map<string, DatePairCols>();
+  const lastUsed = findLastUsedColumn(ws);
+
+  for (const date of dates) {
+    const selfieHeader = `${dateLabel(date)} Selfies`.toLowerCase();
+    for (let c = 1; c <= Math.max(lastUsed, header.cellCount || 0); c++) {
+      if (normalize(cellText(header.getCell(c))) !== selfieHeader) continue;
+      const callsCol = normalize(cellText(header.getCell(c + 1))) === "calls" ? c + 1 : c + 1;
+      pairs.set(date, { selfiesCol: c, callsCol });
+      break;
+    }
+  }
+
+  let nextCol = lastUsed + 1;
+  for (const date of dates) {
+    if (pairs.has(date)) continue;
+    const selfiesCol = nextCol;
+    const callsCol = nextCol + 1;
+    const selfieHeader = header.getCell(selfiesCol);
+    const callsHeader = header.getCell(callsCol);
+
+    selfieHeader.value = `${dateLabel(date)} Selfies`;
+    callsHeader.value = "Calls";
+    styleHeader(selfieHeader);
+    styleHeader(callsHeader);
+    selfieHeader.note = date;
+    callsHeader.note = date;
+    ws.getColumn(selfiesCol).width = 30;
+    ws.getColumn(callsCol).width = 10;
+    pairs.set(date, { selfiesCol, callsCol });
+    nextCol += 2;
+  }
+
+  header.height = Math.max(header.height || 0, 24);
+  header.commit?.();
+  return pairs;
+}
+
+function ensureMasterHeaders(ws: ExcelJS.Worksheet, det: DetectedSheet) {
+  const row = ws.getRow(det.headerRow);
+  const headers: Array<[number | null, string]> = [
+    [det.regionCol, "Region"],
+    [det.codeCol, "Employee Code"],
+    [det.nameCol, "Name"],
+    [det.cityCol, "City"],
+    [det.designationCol, "Designation"],
+  ];
+
+  for (const [col, label] of headers) {
+    if (!col) continue;
+    const cell = row.getCell(col);
+    if (!cellText(cell).trim()) cell.value = label;
+    styleHeader(cell);
+  }
+}
+
 export async function processExcel(
   excelFile: File,
   options: ProcessOptions,
@@ -242,12 +282,10 @@ export async function processExcel(
     );
   }
 
-  const dayMap = new Map<number, string>();
-  for (const r of options.pdfResults) dayMap.set(r.day, r.date);
-  const days = [...dayMap.keys()].sort((a, b) => a - b);
-  const dates = days.map((d) => dayMap.get(d)!);
+  const dates = [...new Set(options.pdfResults.map((r) => r.date))].sort();
+  const days = dates.map((date) => Number(date.slice(8, 10)));
 
-  const matchByEmp = new Map<number, Map<number, number>>();
+  const matchByEmp = new Map<number, Map<string, MatchValue>>();
   const unmatched = new Set<string>();
   const empByCode = new Map<string, number>();
   const empByName = new Map<string, number>();
@@ -286,84 +324,63 @@ export async function processExcel(
         unmatched.add(row.name);
         continue;
       }
-      const dayCounts = matchByEmp.get(idx) ?? new Map<number, number>();
-      const existing = dayCounts.get(pdf.day);
-      dayCounts.set(pdf.day, existing == null ? row.count : Math.max(existing, row.count));
-      matchByEmp.set(idx, dayCounts);
+
+      const dateMap = matchByEmp.get(idx) ?? new Map<string, MatchValue>();
+      const existing = dateMap.get(pdf.date);
+      if (!existing || row.count > existing.selfies) {
+        dateMap.set(pdf.date, { selfies: row.count, calls: row.calls ?? existing?.calls ?? null });
+      } else if (existing.calls == null && row.calls != null) {
+        dateMap.set(pdf.date, { ...existing, calls: row.calls });
+      }
+      matchByEmp.set(idx, dateMap);
     }
   }
 
-  const dayCols = findOrCreateDateColumns(ws, det.headerRow, days, dayMap);
-  const lastDayCol = Math.max(...[...dayCols.values()], det.nameCol);
-  const totalCol = findOrCreateTotalColumn(ws, det.headerRow, lastDayCol);
+  ensureMasterHeaders(ws, det);
+  const datePairs = findDatePairColumns(ws, det.headerRow, dates);
 
   const empTotals = employees.map((employee, idx) => {
     const matches = matchByEmp.get(idx);
     let total = 0;
-    for (const day of days) {
-      const matchedValue = matches?.get(day);
-      if (matchedValue != null) {
-        total += matchedValue;
-        continue;
-      }
-
-      const col = dayCols.get(day);
-      const existingValue = col ? Number(ws.getRow(employee.row).getCell(col).value ?? 0) : 0;
-      if (Number.isFinite(existingValue)) total += existingValue;
+    for (const date of dates) {
+      const match = matches?.get(date);
+      if (match) total += match.selfies;
     }
     return { ...employee, idx, total };
   });
-
-  const totals = empTotals.map((e) => e.total);
-  const maxT = Math.max(...totals, 0);
-  const avgT = totals.length ? totals.reduce((a, b) => a + b, 0) / totals.length : 0;
-  const highThr = Math.max(avgT, maxT * 0.7);
-  const lowThr = avgT * 0.4;
 
   for (const emp of empTotals) {
     const row = ws.getRow(emp.row);
     const matches = matchByEmp.get(emp.idx);
 
-    for (const day of days) {
-      const value = matches?.get(day);
-      if (value == null) continue;
+    for (const date of dates) {
+      const match = matches?.get(date);
+      if (!match) continue;
+      const pair = datePairs.get(date);
+      if (!pair) continue;
 
-      const col = dayCols.get(day);
-      if (!col) continue;
-      const cell = row.getCell(col);
-      cell.value = value;
-      cell.alignment = { horizontal: "center", vertical: "middle" };
-      cell.border = thinBorder();
-      if (value === 0) cell.font = { color: { argb: "FFB0B0B0" } };
+      const selfieCell = row.getCell(pair.selfiesCol);
+      selfieCell.value = `${match.selfies} selfies with locations in grp`;
+      styleBodyCell(selfieCell, match.selfies === 0 ? "zero" : "normal");
+
+      const callsCell = row.getCell(pair.callsCol);
+      callsCell.value = match.calls ?? "";
+      styleBodyCell(callsCell, match.calls === 0 ? "zero" : "normal");
     }
 
-    const totalRefs = days
-      .map((day) => dayCols.get(day))
-      .filter((col): col is number => col != null)
-      .map((col) => `${colLetter(col)}${emp.row}`);
-    const totalCell = row.getCell(totalCol);
-    totalCell.value = totalRefs.length
-      ? { formula: `SUM(${totalRefs.join(",")})`, result: emp.total }
-      : emp.total;
-    totalCell.font = { bold: true };
-    totalCell.alignment = { horizontal: "center", vertical: "middle" };
-    totalCell.border = thinBorder();
-
-    let bg = "FFFFF4CC";
-    if (emp.total >= highThr && emp.total > 0) bg = "FFD4F5DD";
-    else if (emp.total <= lowThr) bg = "FFFCD9D9";
-    totalCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: bg } };
     row.commit?.();
   }
 
-  ws.getColumn(totalCol).width = Math.max(ws.getColumn(totalCol).width || 0, 10);
+  applyBordersAndWidths(ws, det.headerRow, det.dataStartRow, Math.max(det.dataEndRow, ws.rowCount));
 
   const buf = await wb.xlsx.writeBuffer();
   const blob = new Blob([buf], {
     type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   });
 
-  const matched = [...matchByEmp.values()].filter((m) => [...m.values()].some((v) => v > 0)).length;
+  const matched = [...matchByEmp.values()].filter((m) =>
+    [...m.values()].some((v) => v.selfies > 0),
+  ).length;
   return {
     totalEmployees: employees.length,
     matchedEmployees: matched,
@@ -377,30 +394,55 @@ export async function processExcel(
 }
 
 function thinBorder(): Partial<ExcelJS.Borders> {
-  const c = { style: "thin" as const, color: { argb: "FFE2E6EE" } };
+  const c = { style: "thin" as const, color: { argb: "FF000000" } };
   return { top: c, left: c, right: c, bottom: c };
 }
 
-function styleDateHeader(cell: ExcelJS.Cell) {
-  cell.alignment = { horizontal: "center", vertical: "middle" };
-  cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
-  cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF3B5BDB" } };
+function styleHeader(cell: ExcelJS.Cell) {
+  cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+  cell.font = { bold: true, color: { argb: "FF000000" } };
+  cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFF00" } };
   cell.border = thinBorder();
 }
 
-function styleTotalHeader(cell: ExcelJS.Cell) {
-  cell.alignment = { horizontal: "center", vertical: "middle" };
-  cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
-  cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F2A4D" } };
+function styleBodyCell(cell: ExcelJS.Cell, tone: "normal" | "zero") {
+  cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
   cell.border = thinBorder();
+  cell.fill =
+    tone === "zero"
+      ? { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFFFF" } }
+      : { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFF00" } };
 }
 
-function colLetter(col: number): string {
-  let s = "";
-  while (col > 0) {
-    const m = (col - 1) % 26;
-    s = String.fromCharCode(65 + m) + s;
-    col = Math.floor((col - 1) / 26);
+function applyBordersAndWidths(
+  ws: ExcelJS.Worksheet,
+  headerRow: number,
+  dataStartRow: number,
+  dataEndRow: number,
+) {
+  const lastCol = findLastUsedColumn(ws);
+  for (let r = headerRow; r <= dataEndRow; r++) {
+    const row = ws.getRow(r);
+    for (let c = 1; c <= lastCol; c++) {
+      const cell = row.getCell(c);
+      cell.border = thinBorder();
+      if (r === headerRow) {
+        styleHeader(cell);
+      } else if (SPECIAL_TEXT.includes(normalize(cellText(cell)))) {
+        cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFF00" } };
+      }
+    }
+    row.height = r === headerRow ? Math.max(row.height || 0, 24) : row.height;
+    row.commit?.();
   }
-  return s;
+
+  for (let c = 1; c <= lastCol; c++) {
+    const column = ws.getColumn(c);
+    let maxLength = 8;
+    for (let r = headerRow; r <= Math.max(dataEndRow, dataStartRow); r++) {
+      maxLength = Math.max(maxLength, cellText(ws.getRow(r).getCell(c)).length);
+    }
+    column.width = Math.min(Math.max(maxLength + 2, column.width || 8), 35);
+  }
 }
