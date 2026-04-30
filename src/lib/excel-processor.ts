@@ -11,6 +11,7 @@ export interface ProcessReport {
   totalEmployees: number;
   matchedEmployees: number;
   unmatchedNames: string[];
+  warnings: string[];
   dates: string[];
   days: number[];
   blob: Blob;
@@ -284,6 +285,7 @@ export async function processExcel(
 
   const dates = [...new Set(options.pdfResults.map((r) => r.date))].sort();
   const days = dates.map((date) => Number(date.slice(8, 10)));
+  const warnings: string[] = [];
 
   const matchByEmp = new Map<number, Map<string, MatchValue>>();
   const unmatched = new Set<string>();
@@ -318,6 +320,12 @@ export async function processExcel(
   }
 
   for (const pdf of options.pdfResults) {
+    if (pdf.rows.length < employees.length) {
+      warnings.push(
+        `Parsing incomplete - some employees missing in ${pdf.fileName} (${pdf.rows.length}/${employees.length} rows extracted).`,
+      );
+    }
+
     for (const row of pdf.rows) {
       const idx = findEmployee(row);
       if (idx < 0) {
@@ -381,10 +389,21 @@ export async function processExcel(
   const matched = [...matchByEmp.values()].filter((m) =>
     [...m.values()].some((v) => v.selfies > 0),
   ).length;
+
+  console.info("[Excel matcher]", {
+    totalEmployees: employees.length,
+    extractedRows: options.pdfResults.reduce((sum, pdf) => sum + pdf.rows.length, 0),
+    matchedEmployees: matchByEmp.size,
+    skippedRows: unmatched.size,
+    unmatchedRows: [...unmatched],
+    warnings,
+  });
+
   return {
     totalEmployees: employees.length,
     matchedEmployees: matched,
     unmatchedNames: [...unmatched],
+    warnings,
     dates,
     days,
     blob,

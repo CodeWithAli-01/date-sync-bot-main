@@ -1,24 +1,29 @@
-// Client-side PDF text extraction + selfie count parsing.
-// Extracts (employee_code?, name, count) per row from messy daily PDFs.
+// Client-side PDF text extraction + employee-row parsing.
+// Strong mode treats every numeric employee code as the start of a row.
 import * as pdfjsLib from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
 export interface PdfRow {
-  code: string | null; // employee code if detectable
+  code: string | null;
   name: string;
   count: number;
   calls: number | null;
 }
 
 export interface PdfParseResult {
-  date: string; // YYYY-MM-DD
-  day: number; // 1..31
+  date: string;
+  day: number;
   fileName: string;
-  fileHash: string; // sha-256 hex of bytes
+  fileHash: string;
   rows: PdfRow[];
   rawText: string;
+  stats: {
+    detectedRows: number;
+    parsedRows: number;
+    skippedRows: number;
+  };
 }
 
 type PdfTextItem = {
@@ -26,18 +31,24 @@ type PdfTextItem = {
   transform?: number[];
 };
 
+type DetectedPdfRow = {
+  code: string;
+  text: string;
+};
+
 function extractDateFromFilename(fileName: string): string | null {
   const m = fileName.match(/(\d{4}-\d{2}-\d{2})/);
   return m ? m[1] : null;
 }
 
-// Primary extraction rule: number immediately before "selfie/selfies".
-// Avoid broad fallbacks such as "Total: 7" because they can turn unrelated
-// PDF text into counts and then overwrite valid workbook/database values.
 function extractSelfieCount(text: string): number | null {
   const lower = text.toLowerCase();
-  const m1 = lower.match(/(\d+)\s*selfies?\b/);
-  if (m1) return parseInt(m1[1], 10);
+  const selfie = lower.match(/(\d+)\s*selfies?\b/);
+  if (selfie) return parseInt(selfie[1], 10);
+
+  const total = lower.match(/\btotal\b\D{0,20}(\d+)/);
+  if (total) return parseInt(total[1], 10);
+
   return null;
 }
 
@@ -47,11 +58,33 @@ function extractCallsCount(text: string): number | null {
   return m ? parseInt(m[1], 10) : null;
 }
 
-// Detect a leading employee code on a row. Common patterns:
-//   "EMP001 Mashad Hussain ..."   "1234 Mashad ..."   "P-23 Mashad ..."
-function extractCode(line: string): string | null {
-  const m = line.match(/^\s*([A-Z]{1,5}[-_]?\d{2,6}|\d{3,6})\b/i);
-  return m ? m[1].toUpperCase() : null;
+function extractRowStart(line: string): { code: string; rest: string } | null {
+  const trimmed = line.replace(/\s+/g, " ").trim();
+  const match = trimmed.match(/^(?:\d{1,3}[.)-]?\s+)?(\d{4,6})\b\s*(.*)$/);
+  if (!match) return null;
+  return { code: match[1], rest: match[2] ?? "" };
+}
+
+function detectRowsFromLines(lines: string[]): DetectedPdfRow[] {
+  const rows: DetectedPdfRow[] = [];
+  let current: DetectedPdfRow | null = null;
+
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const rowStart = extractRowStart(line);
+    if (rowStart) {
+      if (current) rows.push(current);
+      current = { code: rowStart.code, text: rowStart.rest };
+      continue;
+    }
+
+    if (current) {
+      current.text = `${current.text} ${line}`.replace(/\s+/g, " ").trim();
+    }
+  }
+
+  if (current) rows.push(current);
+  return rows;
 }
 
 async function sha256Hex(buf: ArrayBuffer): Promise<string> {
@@ -70,13 +103,14 @@ export async function parsePdf(file: File): Promise<PdfParseResult> {
   const fileHash = await sha256Hex(buf);
   const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
 
-  const linesByPage: string[][] = [];
+  const allLines: string[] = [];
   let rawText = "";
 
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
     const content = await page.getTextContent();
     const lineMap = new Map<number, { x: number; str: string }[]>();
+
     for (const item of content.items as PdfTextItem[]) {
       const str = item.str;
       if (!str || !str.trim() || !item.transform) continue;
@@ -86,72 +120,69 @@ export async function parsePdf(file: File): Promise<PdfParseResult> {
       arr.push({ x, str });
       lineMap.set(y, arr);
     }
+
     const sortedY = [...lineMap.keys()].sort((a, b) => b - a);
-    const lines: string[] = [];
     for (const y of sortedY) {
       const parts = lineMap.get(y)!.sort((a, b) => a.x - b.x);
-      lines.push(
-        parts
-          .map((p) => p.str)
-          .join(" ")
-          .replace(/\s+/g, " ")
-          .trim(),
-      );
+      const line = parts
+        .map((p) => p.str)
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (!line) continue;
+      allLines.push(line);
+      rawText += `${line}\n`;
     }
-    linesByPage.push(lines);
-    rawText += lines.join("\n") + "\n";
   }
 
+  const detectedRows = detectRowsFromLines(allLines);
   const rows: PdfRow[] = [];
   const seen = new Set<string>();
-  const flatLines = linesByPage.flat();
+  let skippedRows = 0;
 
-  for (let i = 0; i < flatLines.length; i++) {
-    const line = flatLines[i];
-    if (!line) continue;
+  for (const detected of detectedRows) {
+    const count = extractSelfieCount(detected.text) ?? 0;
+    const calls = extractCallsCount(detected.text);
+    const name = cleanName(detected.text) || detected.code;
+    const key = detected.code;
 
-    const count = extractSelfieCount(line);
-    if (count === null) continue;
-    const calls = extractCallsCount(line);
-
-    // Try same-line: "<code?> <name> ... <n> selfies"
-    let name = "";
-    let code: string | null = null;
-    const sameLineMatch = line.match(/^(.+?)[\s:|,-]+\d+\s*selfies?\b/i);
-    if (sameLineMatch) {
-      const head = sameLineMatch[1];
-      code = extractCode(head);
-      name = code ? head.replace(/^[^\s]+\s+/, "") : head;
-    } else {
-      // fall back to previous non-empty line
-      for (let j = i - 1; j >= 0; j--) {
-        if (flatLines[j] && !/^\s*$/.test(flatLines[j])) {
-          const prev = flatLines[j];
-          code = extractCode(prev);
-          name = code ? prev.replace(/^[^\s]+\s+/, "") : prev;
-          break;
-        }
-      }
+    if (seen.has(key)) {
+      skippedRows++;
+      continue;
     }
 
-    name = cleanName(name);
-    if (!name) continue;
-
-    // Skip "0 0 0" style empty rows (no selfie count AND zero numbers only)
-    if (count === 0 && /^[\s0]+$/.test(name)) continue;
-
-    const key = (code ?? "") + "|" + name.toLowerCase();
-    if (seen.has(key)) continue;
     seen.add(key);
-
-    rows.push({ code, name, count, calls });
+    rows.push({ code: detected.code, name, count, calls });
   }
 
-  return { date, day, fileName: file.name, fileHash, rows, rawText };
+  console.info("[PDF parser]", {
+    fileName: file.name,
+    totalPages: pdf.numPages,
+    totalRowsDetected: detectedRows.length,
+    parsedRows: rows.length,
+    skippedRows,
+  });
+
+  return {
+    date,
+    day,
+    fileName: file.name,
+    fileHash,
+    rows,
+    rawText,
+    stats: {
+      detectedRows: detectedRows.length,
+      parsedRows: rows.length,
+      skippedRows,
+    },
+  };
 }
 
 function cleanName(raw: string): string {
   return raw
+    .replace(/\b\d+\s*selfies?\b.*$/i, "")
+    .replace(/\b\d+\s*calls?\b.*$/i, "")
+    .replace(/\btotal\b.*$/i, "")
     .replace(/^\s*\d+[.): -]?\s*/, "")
     .replace(/\s+/g, " ")
     .replace(/[^\p{L}\p{M}\s.'-]/gu, "")

@@ -148,6 +148,9 @@ function HomePage() {
       setProgressLabel("Updating your Excel file…");
       setProgress(80);
       const rep = await processExcel(excelFile, { pdfResults: results });
+      if (rep.warnings.length) {
+        toast.warning(rep.warnings[0]);
+      }
 
       // 3. Sync to database (best-effort)
       setProgressLabel("Saving history to database…");
