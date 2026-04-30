@@ -20,7 +20,7 @@ import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
 import { parsePdf, type PdfParseResult } from "@/lib/pdf-extractor";
 import { processExcel, type ProcessReport } from "@/lib/excel-processor";
-import { syncToDatabase, findProcessedHashes } from "@/lib/db-sync";
+import { syncToDatabase, findProcessedHashes, type EmployeeInput } from "@/lib/db-sync";
 
 export const Route = createFileRoute("/")({
   component: HomePage,
@@ -157,13 +157,17 @@ function HomePage() {
       setProgress(92);
       try {
         const employeeRows = await readEmployees(excelFile);
-        await syncToDatabase({
+        const syncResult = await syncToDatabase({
           employees: employeeRows,
           pdfResults: results,
           failedFiles: failed,
         });
+        rep.debug.totalRecordsInsertedUpdated = syncResult.syncedRecords;
+        rep.debug.totalSkipped += syncResult.skippedRows;
+        rep.debug.parsingErrors = failed.length + syncResult.parsingErrors;
       } catch (e) {
         console.warn("DB sync failed (non-fatal)", e);
+        rep.debug.parsingErrors += 1;
       }
 
       // 4. Prepare download
@@ -361,6 +365,33 @@ function HomePage() {
               />
             </div>
 
+            <div className="mt-6 grid gap-3 rounded-md border border-border bg-muted/20 p-4 md:grid-cols-3">
+              <Stat label="PDFs uploaded" value={report.debug.totalPdfsUploaded} />
+              <Stat label="Detected rows" value={report.debug.totalEmployeesDetected} />
+              <Stat label="Matched rows" value={report.debug.totalMatched} />
+              <Stat
+                label="Skipped rows"
+                value={report.debug.totalSkipped}
+                tone={report.debug.totalSkipped ? "warning" : "default"}
+              />
+              <Stat label="DB upserts" value={report.debug.totalRecordsInsertedUpdated} />
+              <Stat
+                label="Parsing errors"
+                value={report.debug.parsingErrors}
+                tone={report.debug.parsingErrors ? "warning" : "default"}
+              />
+            </div>
+
+            {report.warnings.length > 0 && (
+              <div className="mt-6 rounded-md border border-warning/40 bg-warning/10 p-4">
+                <div className="flex items-center gap-2 text-sm font-semibold text-warning-foreground">
+                  <AlertTriangle className="h-4 w-4" />
+                  PDF parsing incomplete, please review.
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">{report.warnings[0]}</p>
+              </div>
+            )}
+
             {report.preview.length > 0 && (
               <div className="mt-6">
                 <div className="mb-2 text-sm font-semibold text-foreground">Top performers</div>
@@ -406,7 +437,7 @@ function HomePage() {
 
 /* ---------- helpers (read employee list once) ---------- */
 
-async function readEmployees(excelFile: File): Promise<{ name: string; code: string | null }[]> {
+async function readEmployees(excelFile: File): Promise<EmployeeInput[]> {
   const ExcelJS = (await import("exceljs")).default;
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(await excelFile.arrayBuffer());
@@ -415,26 +446,46 @@ async function readEmployees(excelFile: File): Promise<{ name: string; code: str
     for (let r = 1; r <= maxScan; r++) {
       const row = ws.getRow(r);
       let nameCol = 0,
-        codeCol = 0;
-      for (let c = 1; c <= 30; c++) {
+        codeCol = 0,
+        regionCol = 0,
+        cityCol = 0,
+        designationCol = 0;
+      for (let c = 1; c <= 40; c++) {
         const v = String(row.getCell(c).value ?? "")
           .trim()
           .toLowerCase();
         if (!v) continue;
+        if (!regionCol && ["region", "zone", "area"].includes(v)) regionCol = c;
         if (!nameCol && v.includes("name") && !v.includes("file")) nameCol = c;
         if (!codeCol && (/\bcode\b/.test(v) || /\bemp.*id\b/.test(v) || v === "id")) codeCol = c;
+        if (!cityCol && ["city", "town", "territory", "headquarter", "hq"].includes(v)) cityCol = c;
+        if (!designationCol && ["designation", "desig", "position", "title"].includes(v)) {
+          designationCol = c;
+        }
       }
       if (nameCol) {
-        const out: { name: string; code: string | null }[] = [];
+        const out: EmployeeInput[] = [];
         for (let rr = r + 1; rr <= (ws.rowCount || r + 500); rr++) {
           const name = String(ws.getRow(rr).getCell(nameCol).value ?? "").trim();
           if (!name) continue;
+          const sheetRow = ws.getRow(rr);
           const code = codeCol
-            ? String(ws.getRow(rr).getCell(codeCol).value ?? "")
+            ? String(sheetRow.getCell(codeCol).value ?? "")
                 .trim()
                 .toUpperCase() || null
             : null;
-          out.push({ name, code });
+          out.push({
+            name,
+            code,
+            region: regionCol
+              ? String(sheetRow.getCell(regionCol).value ?? "").trim() || null
+              : null,
+            city: cityCol ? String(sheetRow.getCell(cityCol).value ?? "").trim() || null : null,
+            designation: designationCol
+              ? String(sheetRow.getCell(designationCol).value ?? "").trim() || null
+              : null,
+            originalOrder: out.length + 1,
+          });
         }
         if (out.length) return out;
       }

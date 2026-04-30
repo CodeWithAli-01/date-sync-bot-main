@@ -12,6 +12,14 @@ export interface ProcessReport {
   matchedEmployees: number;
   unmatchedNames: string[];
   warnings: string[];
+  debug: {
+    totalPdfsUploaded: number;
+    totalEmployeesDetected: number;
+    totalMatched: number;
+    totalSkipped: number;
+    totalRecordsInsertedUpdated: number;
+    parsingErrors: number;
+  };
   dates: string[];
   days: number[];
   blob: Blob;
@@ -322,7 +330,7 @@ export async function processExcel(
   for (const pdf of options.pdfResults) {
     if (pdf.rows.length < employees.length) {
       warnings.push(
-        `Parsing incomplete - some employees missing in ${pdf.fileName} (${pdf.rows.length}/${employees.length} rows extracted).`,
+        `PDF parsing incomplete, please review. ${pdf.fileName}: ${pdf.rows.length}/${employees.length} rows extracted.`,
       );
     }
 
@@ -404,6 +412,14 @@ export async function processExcel(
     matchedEmployees: matched,
     unmatchedNames: [...unmatched],
     warnings,
+    debug: {
+      totalPdfsUploaded: options.pdfResults.length,
+      totalEmployeesDetected: options.pdfResults.reduce((sum, pdf) => sum + pdf.rows.length, 0),
+      totalMatched: matchByEmp.size,
+      totalSkipped: unmatched.size,
+      totalRecordsInsertedUpdated: 0,
+      parsingErrors: 0,
+    },
     dates,
     days,
     blob,
