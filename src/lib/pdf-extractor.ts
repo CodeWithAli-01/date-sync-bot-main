@@ -9,6 +9,7 @@ export interface PdfRow {
   code: string | null;
   name: string;
   count: number;
+  selfieText: string;
   total: number;
 }
 
@@ -50,15 +51,17 @@ function extractSelfieCount(text: string): number | null {
   return null;
 }
 
+function extractSelfieText(text: string, count: number): string {
+  const match = text.match(/(\d+\s*selfies?\b.*?(?:\bgrp\b|$))/i);
+  if (match) return match[1].replace(/\s+/g, " ").trim();
+  return `${count} selfies with locations in grp`;
+}
+
 function extractTotalValue(
-  text: string,
+  _text: string,
   items: { x: number; str: string }[],
   totalX: number | null,
 ): number {
-  const lower = text.toLowerCase();
-  const labeled = lower.match(/\btotal\b\D{0,12}(\d+)/);
-  if (labeled) return parseInt(labeled[1], 10);
-
   if (totalX == null) return 0;
 
   const numericItems = items
@@ -163,6 +166,7 @@ export async function parsePdf(file: File): Promise<PdfParseResult> {
 
   for (const detected of detectedRows) {
     const count = extractSelfieCount(detected.text) ?? 0;
+    const selfieText = extractSelfieText(detected.text, count);
     const total = extractTotalValue(detected.text, detected.items, totalX);
     const name = cleanName(detected.text) || detected.code;
     const key = detected.code;
@@ -173,7 +177,7 @@ export async function parsePdf(file: File): Promise<PdfParseResult> {
     }
 
     seen.add(key);
-    rows.push({ code: detected.code, name, count, total });
+    rows.push({ code: detected.code, name, count, selfieText, total });
   }
 
   console.info("[PDF parser]", {
@@ -202,7 +206,6 @@ export async function parsePdf(file: File): Promise<PdfParseResult> {
 function cleanName(raw: string): string {
   return raw
     .replace(/\b\d+\s*selfies?\b.*$/i, "")
-    .replace(/\b\d+\s*calls?\b.*$/i, "")
     .replace(/\btotal\b.*$/i, "")
     .replace(/^\s*\d+[.): -]?\s*/, "")
     .replace(/\s+/g, " ")

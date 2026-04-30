@@ -88,6 +88,7 @@ interface DatePairCols {
 
 interface MatchValue {
   selfies: number;
+  selfieText: string;
   total: number;
 }
 
@@ -345,7 +346,11 @@ export async function processExcel(
       const dateMap = matchByEmp.get(idx) ?? new Map<string, MatchValue>();
       const existing = dateMap.get(pdf.date);
       if (!existing || row.count > existing.selfies) {
-        dateMap.set(pdf.date, { selfies: row.count, total: row.total });
+        dateMap.set(pdf.date, {
+          selfies: row.count,
+          selfieText: row.selfieText,
+          total: row.total,
+        });
       } else if (existing.total === 0 && row.total > 0) {
         dateMap.set(pdf.date, { ...existing, total: row.total });
       }
@@ -377,7 +382,7 @@ export async function processExcel(
       if (!pair) continue;
 
       const selfieCell = row.getCell(pair.selfiesCol);
-      selfieCell.value = `${match.selfies} selfies with locations in grp`;
+      selfieCell.value = match.selfieText;
       styleBodyCell(selfieCell, match.selfies === 0 ? "zero" : "normal");
 
       const totalCell = row.getCell(pair.totalCol);

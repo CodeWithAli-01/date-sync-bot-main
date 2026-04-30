@@ -181,7 +181,7 @@ export async function syncToDatabase(opts: SyncInput): Promise<SyncResult> {
         employee_code: employee.code,
         report_date: pdf.date,
         selfie_count: selfieCount,
-        selfie_text: `${selfieCount} selfies with locations in grp`,
+        selfie_text: row.selfieText,
         total_count: totalCount,
         source_file_id: fileIdByName.get(pdf.fileName) ?? existing?.source_file_id ?? null,
         updated_at: new Date().toISOString(),
@@ -238,7 +238,10 @@ async function preserveExistingPositiveValues(
     return {
       ...record,
       selfie_count: selfieCount,
-      selfie_text: `${selfieCount} selfies with locations in grp`,
+      selfie_text:
+        record.selfie_count === 0 && existingSelfies > 0
+          ? `${selfieCount} selfies with locations in grp`
+          : record.selfie_text,
       total_count: totalCount,
     };
   });
