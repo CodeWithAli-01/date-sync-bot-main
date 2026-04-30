@@ -80,7 +80,7 @@ interface DatePairCols {
 
 interface MatchValue {
   selfies: number;
-  calls: number | null;
+  calls: number;
 }
 
 function cellText(cell: ExcelJS.Cell): string {
@@ -336,8 +336,8 @@ export async function processExcel(
       const dateMap = matchByEmp.get(idx) ?? new Map<string, MatchValue>();
       const existing = dateMap.get(pdf.date);
       if (!existing || row.count > existing.selfies) {
-        dateMap.set(pdf.date, { selfies: row.count, calls: row.calls ?? existing?.calls ?? null });
-      } else if (existing.calls == null && row.calls != null) {
+        dateMap.set(pdf.date, { selfies: row.count, calls: row.calls ?? existing?.calls ?? 0 });
+      } else if (existing.calls === 0 && row.calls > 0) {
         dateMap.set(pdf.date, { ...existing, calls: row.calls });
       }
       matchByEmp.set(idx, dateMap);
@@ -372,7 +372,7 @@ export async function processExcel(
       styleBodyCell(selfieCell, match.selfies === 0 ? "zero" : "normal");
 
       const callsCell = row.getCell(pair.callsCol);
-      callsCell.value = match.calls ?? "";
+      callsCell.value = match.calls;
       styleBodyCell(callsCell, match.calls === 0 ? "zero" : "normal");
     }
 

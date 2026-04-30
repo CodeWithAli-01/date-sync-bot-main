@@ -9,7 +9,7 @@ export interface PdfRow {
   code: string | null;
   name: string;
   count: number;
-  calls: number | null;
+  calls: number;
 }
 
 export interface PdfParseResult {
@@ -52,10 +52,27 @@ function extractSelfieCount(text: string): number | null {
   return null;
 }
 
-function extractCallsCount(text: string): number | null {
+function extractCallsCount(text: string, selfieCount: number | null): number {
   const lower = text.toLowerCase();
-  const m = lower.match(/(\d+)\s*calls?\b/);
-  return m ? parseInt(m[1], 10) : null;
+  const labeled =
+    lower.match(/\btotal\s*calls?\b\D{0,20}(\d+)/) ??
+    lower.match(/\bcalls?\b\D{0,20}(\d+)/) ??
+    lower.match(/(\d+)\s*\btotal\s*calls?\b/) ??
+    lower.match(/(\d+)\s*\bcalls?\b/);
+  if (labeled) return parseInt(labeled[1], 10);
+
+  const withoutSelfies = text
+    .replace(/\d+\s*selfies?\b/gi, "")
+    .replace(/\btotal\b\D{0,20}\d+/gi, "");
+  const numericTokens = [...withoutSelfies.matchAll(/\b\d{1,4}\b/g)]
+    .map((m) => parseInt(m[0], 10))
+    .filter((n) => Number.isFinite(n));
+
+  if (!numericTokens.length) return 0;
+
+  const nonSelfieTokens =
+    selfieCount == null ? numericTokens : numericTokens.filter((n) => n !== selfieCount);
+  return (nonSelfieTokens.at(-1) ?? numericTokens.at(-1)) || 0;
 }
 
 function extractRowStart(line: string): { code: string; rest: string } | null {
@@ -142,7 +159,7 @@ export async function parsePdf(file: File): Promise<PdfParseResult> {
 
   for (const detected of detectedRows) {
     const count = extractSelfieCount(detected.text) ?? 0;
-    const calls = extractCallsCount(detected.text);
+    const calls = extractCallsCount(detected.text, count);
     const name = cleanName(detected.text) || detected.code;
     const key = detected.code;
 
