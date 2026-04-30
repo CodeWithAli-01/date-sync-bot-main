@@ -83,12 +83,12 @@ interface Emp {
 
 interface DatePairCols {
   selfiesCol: number;
-  callsCol: number;
+  totalCol: number;
 }
 
 interface MatchValue {
   selfies: number;
-  calls: number;
+  total: number;
 }
 
 function cellText(cell: ExcelJS.Cell): string {
@@ -225,8 +225,9 @@ function findDatePairColumns(
     const selfieHeader = `${dateLabel(date)} Selfies`.toLowerCase();
     for (let c = 1; c <= Math.max(lastUsed, header.cellCount || 0); c++) {
       if (normalize(cellText(header.getCell(c))) !== selfieHeader) continue;
-      const callsCol = normalize(cellText(header.getCell(c + 1))) === "calls" ? c + 1 : c + 1;
-      pairs.set(date, { selfiesCol: c, callsCol });
+      const totalCol = c + 1;
+      header.getCell(totalCol).value = "Total";
+      pairs.set(date, { selfiesCol: c, totalCol });
       break;
     }
   }
@@ -235,19 +236,19 @@ function findDatePairColumns(
   for (const date of dates) {
     if (pairs.has(date)) continue;
     const selfiesCol = nextCol;
-    const callsCol = nextCol + 1;
+    const totalCol = nextCol + 1;
     const selfieHeader = header.getCell(selfiesCol);
-    const callsHeader = header.getCell(callsCol);
+    const totalHeader = header.getCell(totalCol);
 
     selfieHeader.value = `${dateLabel(date)} Selfies`;
-    callsHeader.value = "Calls";
+    totalHeader.value = "Total";
     styleHeader(selfieHeader);
-    styleHeader(callsHeader);
+    styleHeader(totalHeader);
     selfieHeader.note = date;
-    callsHeader.note = date;
+    totalHeader.note = date;
     ws.getColumn(selfiesCol).width = 30;
-    ws.getColumn(callsCol).width = 10;
-    pairs.set(date, { selfiesCol, callsCol });
+    ws.getColumn(totalCol).width = 10;
+    pairs.set(date, { selfiesCol, totalCol });
     nextCol += 2;
   }
 
@@ -344,9 +345,9 @@ export async function processExcel(
       const dateMap = matchByEmp.get(idx) ?? new Map<string, MatchValue>();
       const existing = dateMap.get(pdf.date);
       if (!existing || row.count > existing.selfies) {
-        dateMap.set(pdf.date, { selfies: row.count, calls: row.calls ?? existing?.calls ?? 0 });
-      } else if (existing.calls === 0 && row.calls > 0) {
-        dateMap.set(pdf.date, { ...existing, calls: row.calls });
+        dateMap.set(pdf.date, { selfies: row.count, total: row.total });
+      } else if (existing.total === 0 && row.total > 0) {
+        dateMap.set(pdf.date, { ...existing, total: row.total });
       }
       matchByEmp.set(idx, dateMap);
     }
@@ -379,9 +380,9 @@ export async function processExcel(
       selfieCell.value = `${match.selfies} selfies with locations in grp`;
       styleBodyCell(selfieCell, match.selfies === 0 ? "zero" : "normal");
 
-      const callsCell = row.getCell(pair.callsCol);
-      callsCell.value = match.calls;
-      styleBodyCell(callsCell, match.calls === 0 ? "zero" : "normal");
+      const totalCell = row.getCell(pair.totalCol);
+      totalCell.value = match.total;
+      styleBodyCell(totalCell, match.total === 0 ? "zero" : "normal");
     }
 
     row.commit?.();

@@ -33,7 +33,7 @@ interface DailyRecordInput {
   report_date: string;
   selfie_text: string;
   selfie_count: number;
-  calls_count: number;
+  total_count: number;
   source_file_id: string | null;
   updated_at: string;
 }
@@ -176,13 +176,13 @@ export async function syncToDatabase(opts: SyncInput): Promise<SyncResult> {
       const key = `${employee.code}|${pdf.date}`;
       const existing = recordByKey.get(key);
       const selfieCount = existing ? Math.max(existing.selfie_count, row.count) : row.count;
-      const callsCount = existing ? Math.max(existing.calls_count, row.calls) : row.calls;
+      const totalCount = existing ? Math.max(existing.total_count, row.total) : row.total;
       recordByKey.set(key, {
         employee_code: employee.code,
         report_date: pdf.date,
         selfie_count: selfieCount,
         selfie_text: `${selfieCount} selfies with locations in grp`,
-        calls_count: callsCount,
+        total_count: totalCount,
         source_file_id: fileIdByName.get(pdf.fileName) ?? existing?.source_file_id ?? null,
         updated_at: new Date().toISOString(),
       });
@@ -217,7 +217,7 @@ async function preserveExistingPositiveValues(
   const codes = [...new Set(records.map((r) => r.employee_code))];
   const dates = [...new Set(records.map((r) => r.report_date))];
   const { data } = await table("daily_records")
-    .select("employee_code,report_date,selfie_count,calls_count")
+    .select("employee_code,report_date,selfie_count,total_count")
     .in("employee_code", codes)
     .in("report_date", dates);
 
@@ -229,17 +229,17 @@ async function preserveExistingPositiveValues(
   return records.map((record) => {
     const existing = existingByKey.get(`${record.employee_code}|${record.report_date}`);
     const existingSelfies = Number(existing?.selfie_count ?? 0);
-    const existingCalls = Number(existing?.calls_count ?? 0);
+    const existingTotal = Number(existing?.total_count ?? 0);
     const selfieCount =
       record.selfie_count === 0 && existingSelfies > 0 ? existingSelfies : record.selfie_count;
-    const callsCount =
-      record.calls_count === 0 && existingCalls > 0 ? existingCalls : record.calls_count;
+    const totalCount =
+      record.total_count === 0 && existingTotal > 0 ? existingTotal : record.total_count;
 
     return {
       ...record,
       selfie_count: selfieCount,
       selfie_text: `${selfieCount} selfies with locations in grp`,
-      calls_count: callsCount,
+      total_count: totalCount,
     };
   });
 }

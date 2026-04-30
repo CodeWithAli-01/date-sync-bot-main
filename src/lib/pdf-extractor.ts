@@ -9,7 +9,7 @@ export interface PdfRow {
   code: string | null;
   name: string;
   count: number;
-  calls: number;
+  total: number;
 }
 
 export interface PdfParseResult {
@@ -34,6 +34,7 @@ type PdfTextItem = {
 type DetectedPdfRow = {
   code: string;
   text: string;
+  items: { x: number; str: string }[];
 };
 
 function extractDateFromFilename(fileName: string): string | null {
@@ -46,33 +47,26 @@ function extractSelfieCount(text: string): number | null {
   const selfie = lower.match(/(\d+)\s*selfies?\b/);
   if (selfie) return parseInt(selfie[1], 10);
 
-  const total = lower.match(/\btotal\b\D{0,20}(\d+)/);
-  if (total) return parseInt(total[1], 10);
-
   return null;
 }
 
-function extractCallsCount(text: string, selfieCount: number | null): number {
+function extractTotalValue(
+  text: string,
+  items: { x: number; str: string }[],
+  totalX: number | null,
+): number {
   const lower = text.toLowerCase();
-  const labeled =
-    lower.match(/\btotal\s*calls?\b\D{0,20}(\d+)/) ??
-    lower.match(/\bcalls?\b\D{0,20}(\d+)/) ??
-    lower.match(/(\d+)\s*\btotal\s*calls?\b/) ??
-    lower.match(/(\d+)\s*\bcalls?\b/);
+  const labeled = lower.match(/\btotal\b\D{0,12}(\d+)/);
   if (labeled) return parseInt(labeled[1], 10);
 
-  const withoutSelfies = text
-    .replace(/\d+\s*selfies?\b/gi, "")
-    .replace(/\btotal\b\D{0,20}\d+/gi, "");
-  const numericTokens = [...withoutSelfies.matchAll(/\b\d{1,4}\b/g)]
-    .map((m) => parseInt(m[0], 10))
-    .filter((n) => Number.isFinite(n));
+  if (totalX == null) return 0;
 
-  if (!numericTokens.length) return 0;
+  const numericItems = items
+    .filter((item) => /^\d+$/.test(item.str.trim()))
+    .map((item) => ({ value: parseInt(item.str.trim(), 10), distance: Math.abs(item.x - totalX) }))
+    .sort((a, b) => a.distance - b.distance);
 
-  const nonSelfieTokens =
-    selfieCount == null ? numericTokens : numericTokens.filter((n) => n !== selfieCount);
-  return (nonSelfieTokens.at(-1) ?? numericTokens.at(-1)) || 0;
+  return numericItems[0]?.value ?? 0;
 }
 
 function extractRowStart(line: string): { code: string; rest: string } | null {
@@ -82,21 +76,24 @@ function extractRowStart(line: string): { code: string; rest: string } | null {
   return { code: match[1], rest: match[2] ?? "" };
 }
 
-function detectRowsFromLines(lines: string[]): DetectedPdfRow[] {
+function detectRowsFromLines(
+  lines: { text: string; items: { x: number; str: string }[] }[],
+): DetectedPdfRow[] {
   const rows: DetectedPdfRow[] = [];
   let current: DetectedPdfRow | null = null;
 
   for (const line of lines) {
-    if (!line.trim()) continue;
-    const rowStart = extractRowStart(line);
+    if (!line.text.trim()) continue;
+    const rowStart = extractRowStart(line.text);
     if (rowStart) {
       if (current) rows.push(current);
-      current = { code: rowStart.code, text: rowStart.rest };
+      current = { code: rowStart.code, text: rowStart.rest, items: line.items };
       continue;
     }
 
     if (current) {
-      current.text = `${current.text} ${line}`.replace(/\s+/g, " ").trim();
+      current.text = `${current.text} ${line.text}`.replace(/\s+/g, " ").trim();
+      current.items.push(...line.items);
     }
   }
 
@@ -120,8 +117,9 @@ export async function parsePdf(file: File): Promise<PdfParseResult> {
   const fileHash = await sha256Hex(buf);
   const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
 
-  const allLines: string[] = [];
+  const allLines: { text: string; items: { x: number; str: string }[] }[] = [];
   let rawText = "";
+  const totalHeaderXs: number[] = [];
 
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
@@ -147,11 +145,17 @@ export async function parsePdf(file: File): Promise<PdfParseResult> {
         .replace(/\s+/g, " ")
         .trim();
       if (!line) continue;
-      allLines.push(line);
+      for (const part of parts) {
+        if (/^total$/i.test(part.str.trim())) totalHeaderXs.push(part.x);
+      }
+      allLines.push({ text: line, items: parts });
       rawText += `${line}\n`;
     }
   }
 
+  const totalX = totalHeaderXs.length
+    ? totalHeaderXs.reduce((sum, x) => sum + x, 0) / totalHeaderXs.length
+    : null;
   const detectedRows = detectRowsFromLines(allLines);
   const rows: PdfRow[] = [];
   const seen = new Set<string>();
@@ -159,7 +163,7 @@ export async function parsePdf(file: File): Promise<PdfParseResult> {
 
   for (const detected of detectedRows) {
     const count = extractSelfieCount(detected.text) ?? 0;
-    const calls = extractCallsCount(detected.text, count);
+    const total = extractTotalValue(detected.text, detected.items, totalX);
     const name = cleanName(detected.text) || detected.code;
     const key = detected.code;
 
@@ -169,7 +173,7 @@ export async function parsePdf(file: File): Promise<PdfParseResult> {
     }
 
     seen.add(key);
-    rows.push({ code: detected.code, name, count, calls });
+    rows.push({ code: detected.code, name, count, total });
   }
 
   console.info("[PDF parser]", {
