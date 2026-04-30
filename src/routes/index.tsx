@@ -60,9 +60,7 @@ function HomePage() {
   const onPdfChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const list = e.target.files;
     if (!list) return;
-    const incoming = Array.from(list).filter((f) =>
-      f.name.toLowerCase().endsWith(".pdf"),
-    );
+    const incoming = Array.from(list).filter((f) => f.name.toLowerCase().endsWith(".pdf"));
     setPdfFiles((prev) => {
       const map = new Map(prev.map((p) => [p.name, p]));
       for (const f of incoming) map.set(f.name, f);
@@ -72,8 +70,7 @@ function HomePage() {
     setDownloadUrl(null);
   };
 
-  const removePdf = (name: string) =>
-    setPdfFiles((prev) => prev.filter((p) => p.name !== name));
+  const removePdf = (name: string) => setPdfFiles((prev) => prev.filter((p) => p.name !== name));
 
   const sortedDates = useMemo(() => {
     const ds = pdfFiles
@@ -178,9 +175,7 @@ function HomePage() {
       );
     } catch (err) {
       console.error(err);
-      toast.error(
-        err instanceof Error ? err.message : "Something went wrong while processing.",
-      );
+      toast.error(err instanceof Error ? err.message : "Something went wrong while processing.");
     } finally {
       setProcessing(false);
     }
@@ -215,9 +210,8 @@ function HomePage() {
             Pharma Selfie Auto Reporting System
           </h1>
           <p className="mt-4 max-w-2xl text-base opacity-90 md:text-lg">
-            Upload your Active Members Excel and the daily PDF reports. We fill the
-            same Excel with date-wise selfie counts, totals, sorting and color-coded
-            performance — in seconds.
+            Upload your Active Members Excel and the daily PDF reports. We fill the same Excel with
+            date-wise selfie counts, totals and color-coded performance — in seconds.
           </p>
           <div className="mt-6 flex flex-wrap gap-2 text-xs">
             <Pill icon={<Camera className="h-3 w-3" />} label="Smart selfie extraction" />
@@ -246,11 +240,7 @@ function HomePage() {
               onChange={onExcelChange}
             />
             {excelFile ? (
-              <FilePill
-                name={excelFile.name}
-                onRemove={() => setExcelFile(null)}
-                color="primary"
-              />
+              <FilePill name={excelFile.name} onRemove={() => setExcelFile(null)} color="primary" />
             ) : (
               <EmptyHint label="Choose .xlsx file" />
             )}
@@ -303,8 +293,8 @@ function HomePage() {
                 Step 3 — Generate the report
               </h2>
               <p className="text-sm text-muted-foreground">
-                We&apos;ll read every PDF, match exact names to your sheet, fill date
-                columns, calculate totals, sort high-to-low and color-code performers.
+                We&apos;ll read every PDF, match exact names to your sheet, fill date columns,
+                calculate totals and color-code performers without changing row order.
               </p>
             </div>
             <Button
@@ -344,9 +334,7 @@ function HomePage() {
                   <CheckCircle2 className="h-5 w-5" />
                 </div>
                 <div>
-                  <h3 className="text-lg font-semibold text-foreground">
-                    Report ready
-                  </h3>
+                  <h3 className="text-lg font-semibold text-foreground">Report ready</h3>
                   <p className="text-sm text-muted-foreground">
                     Updated <span className="font-medium">{report.fileName}</span> —{" "}
                     {report.totalEmployees} employees · {report.dates.length} dates ·{" "}
@@ -372,9 +360,7 @@ function HomePage() {
 
             {report.preview.length > 0 && (
               <div className="mt-6">
-                <div className="mb-2 text-sm font-semibold text-foreground">
-                  Top performers
-                </div>
+                <div className="mb-2 text-sm font-semibold text-foreground">Top performers</div>
                 <div className="space-y-1.5">
                   {report.preview.map((p, i) => (
                     <div
@@ -387,9 +373,7 @@ function HomePage() {
                         </span>
                         {p.name}
                       </span>
-                      <span className="font-semibold text-foreground">
-                        {p.total}
-                      </span>
+                      <span className="font-semibold text-foreground">{p.total}</span>
                     </div>
                   ))}
                 </div>
@@ -400,8 +384,8 @@ function HomePage() {
               <div className="mt-6 rounded-md border border-warning/40 bg-warning/10 p-4">
                 <div className="mb-1 flex items-center gap-2 text-sm font-semibold text-warning-foreground">
                   <AlertTriangle className="h-4 w-4" />
-                  {report.unmatchedNames.length} name(s) in PDFs didn&apos;t match
-                  your Active Members sheet
+                  {report.unmatchedNames.length} name(s) in PDFs didn&apos;t match your Active
+                  Members sheet
                 </div>
                 <p className="text-xs text-muted-foreground">
                   These were ignored (resigned / not active). Examples:{" "}
@@ -419,9 +403,7 @@ function HomePage() {
 
 /* ---------- helpers (read employee list once) ---------- */
 
-async function readEmployees(
-  excelFile: File
-): Promise<{ name: string; code: string | null }[]> {
+async function readEmployees(excelFile: File): Promise<{ name: string; code: string | null }[]> {
   const ExcelJS = (await import("exceljs")).default;
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(await excelFile.arrayBuffer());
@@ -429,9 +411,12 @@ async function readEmployees(
     const maxScan = Math.min(10, ws.rowCount || 10);
     for (let r = 1; r <= maxScan; r++) {
       const row = ws.getRow(r);
-      let nameCol = 0, codeCol = 0;
+      let nameCol = 0,
+        codeCol = 0;
       for (let c = 1; c <= 30; c++) {
-        const v = String(row.getCell(c).value ?? "").trim().toLowerCase();
+        const v = String(row.getCell(c).value ?? "")
+          .trim()
+          .toLowerCase();
         if (!v) continue;
         if (!nameCol && v.includes("name") && !v.includes("file")) nameCol = c;
         if (!codeCol && (/\bcode\b/.test(v) || /\bemp.*id\b/.test(v) || v === "id")) codeCol = c;
@@ -442,7 +427,9 @@ async function readEmployees(
           const name = String(ws.getRow(rr).getCell(nameCol).value ?? "").trim();
           if (!name) continue;
           const code = codeCol
-            ? String(ws.getRow(rr).getCell(codeCol).value ?? "").trim().toUpperCase() || null
+            ? String(ws.getRow(rr).getCell(codeCol).value ?? "")
+                .trim()
+                .toUpperCase() || null
             : null;
           out.push({ name, code });
         }
@@ -476,9 +463,7 @@ function UploadCard({
     <Card className="border-border bg-card p-6 shadow-[var(--shadow-soft)]">
       <div className="mb-4 flex items-start justify-between">
         <div>
-          <div className="text-xs font-bold uppercase tracking-wider text-primary">
-            Step {step}
-          </div>
+          <div className="text-xs font-bold uppercase tracking-wider text-primary">Step {step}</div>
           <h2 className="mt-1 flex items-center gap-2 text-lg font-semibold text-foreground">
             <span className="flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
               {icon}
@@ -500,9 +485,7 @@ function UploadCard({
 }
 
 function EmptyHint({ label }: { label: string }) {
-  return (
-    <div className="py-4 text-center text-sm text-muted-foreground">{label}</div>
-  );
+  return <div className="py-4 text-center text-sm text-muted-foreground">{label}</div>;
 }
 
 function FilePill({
@@ -555,14 +538,10 @@ function Stat({
   return (
     <div
       className={`rounded-md border p-4 ${
-        tone === "warning"
-          ? "border-warning/40 bg-warning/10"
-          : "border-border bg-muted/30"
+        tone === "warning" ? "border-warning/40 bg-warning/10" : "border-border bg-muted/30"
       }`}
     >
-      <div className="text-xs uppercase tracking-wider text-muted-foreground">
-        {label}
-      </div>
+      <div className="text-xs uppercase tracking-wider text-muted-foreground">{label}</div>
       <div className="mt-1 text-2xl font-bold text-foreground">{value}</div>
     </div>
   );

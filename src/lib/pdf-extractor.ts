@@ -20,20 +20,23 @@ export interface PdfParseResult {
   rawText: string;
 }
 
+type PdfTextItem = {
+  str?: string;
+  transform?: number[];
+};
+
 function extractDateFromFilename(fileName: string): string | null {
   const m = fileName.match(/(\d{4}-\d{2}-\d{2})/);
   return m ? m[1] : null;
 }
 
-// "11 selfies" / "0 selfie" / "selfies - 5" / "Total: 7"
+// Primary extraction rule: number immediately before "selfie/selfies".
+// Avoid broad fallbacks such as "Total: 7" because they can turn unrelated
+// PDF text into counts and then overwrite valid workbook/database values.
 function extractSelfieCount(text: string): number | null {
   const lower = text.toLowerCase();
-  const m1 = lower.match(/(\d+)\s*selfie/);
+  const m1 = lower.match(/(\d+)\s*selfies?\b/);
   if (m1) return parseInt(m1[1], 10);
-  const m2 = lower.match(/selfie[^\d]{0,15}(\d+)/);
-  if (m2) return parseInt(m2[1], 10);
-  const m3 = lower.match(/total[\s:]+(\d+)/);
-  if (m3) return parseInt(m3[1], 10);
   return null;
 }
 
@@ -46,9 +49,7 @@ function extractCode(line: string): string | null {
 
 async function sha256Hex(buf: ArrayBuffer): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", buf);
-  return [...new Uint8Array(digest)]
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 export async function parsePdf(file: File): Promise<PdfParseResult> {
@@ -69,9 +70,9 @@ export async function parsePdf(file: File): Promise<PdfParseResult> {
     const page = await pdf.getPage(i);
     const content = await page.getTextContent();
     const lineMap = new Map<number, { x: number; str: string }[]>();
-    for (const item of content.items as any[]) {
+    for (const item of content.items as PdfTextItem[]) {
       const str = item.str;
-      if (!str || !str.trim()) continue;
+      if (!str || !str.trim() || !item.transform) continue;
       const y = Math.round(item.transform[5]);
       const x = item.transform[4];
       const arr = lineMap.get(y) ?? [];
@@ -82,7 +83,13 @@ export async function parsePdf(file: File): Promise<PdfParseResult> {
     const lines: string[] = [];
     for (const y of sortedY) {
       const parts = lineMap.get(y)!.sort((a, b) => a.x - b.x);
-      lines.push(parts.map((p) => p.str).join(" ").replace(/\s+/g, " ").trim());
+      lines.push(
+        parts
+          .map((p) => p.str)
+          .join(" ")
+          .replace(/\s+/g, " ")
+          .trim(),
+      );
     }
     linesByPage.push(lines);
     rawText += lines.join("\n") + "\n";
@@ -102,7 +109,7 @@ export async function parsePdf(file: File): Promise<PdfParseResult> {
     // Try same-line: "<code?> <name> ... <n> selfies"
     let name = "";
     let code: string | null = null;
-    const sameLineMatch = line.match(/^(.+?)[\s\-:|,]+\d+\s*selfie/i);
+    const sameLineMatch = line.match(/^(.+?)[\s:|,-]+\d+\s*selfies?\b/i);
     if (sameLineMatch) {
       const head = sameLineMatch[1];
       code = extractCode(head);
@@ -137,8 +144,8 @@ export async function parsePdf(file: File): Promise<PdfParseResult> {
 
 function cleanName(raw: string): string {
   return raw
-    .replace(/^\s*\d+[\.\):\-]?\s*/, "")
+    .replace(/^\s*\d+[.): -]?\s*/, "")
     .replace(/\s+/g, " ")
-    .replace(/[^\p{L}\p{M}\s\.\-']/gu, "")
+    .replace(/[^\p{L}\p{M}\s.'-]/gu, "")
     .trim();
 }
