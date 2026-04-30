@@ -29,18 +29,37 @@ export const Route = createRootRoute({
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Lovable App" },
-      { name: "description", content: "Selfie Reporter Pro automates daily selfie report generation directly into your Active Members Excel sheet." },
-      { name: "author", content: "Lovable" },
-      { property: "og:title", content: "Lovable App" },
-      { property: "og:description", content: "Selfie Reporter Pro automates daily selfie report generation directly into your Active Members Excel sheet." },
+      { title: "neutropharmacallsummry.com" },
+      {
+        name: "description",
+        content:
+          "neutropharmacallsummry.com automates daily pharma selfie and total report generation directly into your Active Members Excel sheet.",
+      },
+      { name: "author", content: "Neutro Pharma" },
+      { property: "og:title", content: "neutropharmacallsummry.com" },
+      {
+        property: "og:description",
+        content:
+          "neutropharmacallsummry.com automates daily pharma selfie and total report generation directly into your Active Members Excel sheet.",
+      },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
-      { name: "twitter:site", content: "@Lovable" },
-      { name: "twitter:title", content: "Lovable App" },
-      { name: "twitter:description", content: "Selfie Reporter Pro automates daily selfie report generation directly into your Active Members Excel sheet." },
-      { property: "og:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/455a173c-bf3e-41ee-b198-e856f231012e/id-preview-89b54ac0--7fc4e1ab-9aef-408a-a0de-059a722d5442.lovable.app-1777532430743.png" },
-      { name: "twitter:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/455a173c-bf3e-41ee-b198-e856f231012e/id-preview-89b54ac0--7fc4e1ab-9aef-408a-a0de-059a722d5442.lovable.app-1777532430743.png" },
+      { name: "twitter:title", content: "neutropharmacallsummry.com" },
+      {
+        name: "twitter:description",
+        content:
+          "neutropharmacallsummry.com automates daily pharma selfie and total report generation directly into your Active Members Excel sheet.",
+      },
+      {
+        property: "og:image",
+        content:
+          "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/455a173c-bf3e-41ee-b198-e856f231012e/id-preview-89b54ac0--7fc4e1ab-9aef-408a-a0de-059a722d5442.lovable.app-1777532430743.png",
+      },
+      {
+        name: "twitter:image",
+        content:
+          "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/455a173c-bf3e-41ee-b198-e856f231012e/id-preview-89b54ac0--7fc4e1ab-9aef-408a-a0de-059a722d5442.lovable.app-1777532430743.png",
+      },
     ],
     links: [
       {

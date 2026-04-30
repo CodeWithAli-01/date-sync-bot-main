@@ -26,11 +26,11 @@ export const Route = createFileRoute("/")({
   component: HomePage,
   head: () => ({
     meta: [
-      { title: "Pharma Selfie Auto Reporting System" },
+      { title: "neutropharmacallsummry.com" },
       {
         name: "description",
         content:
-          "Automatically build date-wise selfie attendance reports for your pharma team — upload PDFs and your Active Members Excel, download the same file fully filled in one click.",
+          "neutropharmacallsummry.com builds date-wise pharma selfie and total reports from PDFs into your Active Members Excel.",
       },
     ],
   }),
@@ -214,7 +214,7 @@ function HomePage() {
             One-click automated reporting
           </div>
           <h1 className="mt-3 text-4xl font-bold tracking-tight md:text-5xl">
-            Pharma Selfie Auto Reporting System
+            neutropharmacallsummry.com
           </h1>
           <p className="mt-4 max-w-2xl text-base opacity-90 md:text-lg">
             Upload your Active Members Excel and the daily PDF reports. We fill the same Excel with
