@@ -2183,7 +2183,10 @@ function applyThemeColor(color: string) {
     "--gradient-hero",
     `linear-gradient(135deg, ${color}, color-mix(in srgb, ${color} 68%, white))`,
   );
-  root.style.setProperty("--shadow-elegant", `0 14px 38px -18px ${hexWithAlpha(color, "66")}`);
+  root.style.setProperty(
+    "--shadow-elegant",
+    `16px 16px 36px color-mix(in srgb, ${color} 24%, black 20%), -14px -14px 34px color-mix(in srgb, white 92%, ${color})`,
+  );
 }
 
 function applyThemeMode(mode: "light" | "dark") {
@@ -2195,10 +2198,6 @@ function readableTextColor(hex: string): string {
   if (!rgb) return "#ffffff";
   const luminance = (0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b) / 255;
   return luminance > 0.62 ? "#111827" : "#ffffff";
-}
-
-function hexWithAlpha(hex: string, alpha: string): string {
-  return /^#[0-9a-f]{6}$/i.test(hex) ? `${hex}${alpha}` : hex;
 }
 
 function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
@@ -2498,7 +2497,7 @@ function BrandMark({ icon }: { icon: React.ReactNode }) {
       <span className="absolute left-0 top-1 h-7 w-7 rounded-full bg-primary/35" />
       <span className="absolute right-0 top-1.5 h-7 w-7 rounded-full bg-primary/25" />
       <span className="absolute bottom-0 left-2.5 h-7 w-7 rounded-full bg-primary/45" />
-      <span className="relative flex h-10 w-10 items-center justify-center rounded-md bg-primary text-primary-foreground shadow-[var(--shadow-soft)] ring-2 ring-white/80">
+      <span className="relative flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-[var(--shadow-soft)] ring-2 ring-white/70">
         {icon}
       </span>
     </div>
@@ -2534,7 +2533,7 @@ function ThemeCustomizer({
         <button
           type="button"
           onClick={onToggleMode}
-          className="flex items-center gap-2 rounded-md border border-border bg-card px-2.5 py-2 text-sm font-semibold text-foreground shadow-[var(--shadow-soft)] transition hover:border-primary/40 hover:shadow-[var(--shadow-elegant)] sm:px-3"
+          className="flex items-center gap-2 rounded-xl border border-white/50 bg-card px-2.5 py-2 text-sm font-semibold text-foreground shadow-[var(--shadow-soft)] transition hover:border-primary/40 hover:shadow-[var(--shadow-elegant)] sm:px-3"
           aria-label={`Switch to ${mode === "dark" ? "light" : "dark"} theme`}
         >
           {mode === "dark" ? (
@@ -2548,7 +2547,7 @@ function ThemeCustomizer({
         <button
           type="button"
           onClick={() => setOpen((current) => !current)}
-          className="flex items-center gap-2 rounded-md border border-border bg-card px-2.5 py-2 text-sm font-semibold text-foreground shadow-[var(--shadow-soft)] transition hover:border-primary/40 hover:shadow-[var(--shadow-elegant)] sm:px-3"
+          className="flex items-center gap-2 rounded-xl border border-white/50 bg-card px-2.5 py-2 text-sm font-semibold text-foreground shadow-[var(--shadow-soft)] transition hover:border-primary/40 hover:shadow-[var(--shadow-elegant)] sm:px-3"
           aria-expanded={open}
           aria-label="Open color settings"
         >
@@ -2560,7 +2559,7 @@ function ThemeCustomizer({
       </div>
 
       {open && (
-        <div className="absolute right-0 mt-2 w-52 rounded-md border border-border bg-card/98 p-3 shadow-[var(--shadow-elegant)] backdrop-blur">
+        <div className="absolute right-0 mt-2 w-52 rounded-2xl border border-white/50 bg-card/98 p-3 shadow-[var(--shadow-elegant)] backdrop-blur">
           <div className="mb-2 text-xs font-bold uppercase tracking-wide text-muted-foreground">
             Theme Color
           </div>
@@ -2612,7 +2611,7 @@ function ColorSplashMark() {
 
 function ModulePill({ label }: { label: string }) {
   return (
-    <div className="mt-1 inline-flex items-center rounded-md border border-white/20 bg-white/10 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-white">
+    <div className="mt-1 inline-flex items-center rounded-xl border border-white/25 bg-white/10 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-white shadow-[var(--shadow-inset)]">
       {label}
     </div>
   );
@@ -2635,13 +2634,13 @@ function FunctionCard({
 }) {
   return (
     <Card
-      className={`min-h-52 border-border bg-[var(--gradient-card)] p-5 shadow-[var(--shadow-soft)] transition ${
+      className={`min-h-52 border-white/45 bg-[var(--gradient-card)] p-5 shadow-[var(--shadow-soft)] transition ${
         disabled ? "opacity-70" : "hover:border-primary/35 hover:shadow-[var(--shadow-elegant)]"
       } ${className}`}
     >
       <div className="flex h-full flex-col gap-5">
         <div className="flex items-start gap-3">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground shadow-sm">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-[var(--shadow-soft)]">
             {icon}
           </div>
           <div className="min-w-0 flex-1">
@@ -2650,7 +2649,7 @@ function FunctionCard({
           </div>
         </div>
         <Button
-          className="mt-auto h-10 w-full bg-primary text-primary-foreground shadow-sm hover:bg-primary/90"
+          className="mt-auto h-10 w-full bg-primary text-primary-foreground shadow-[var(--shadow-soft)] hover:bg-primary/90"
           onClick={onClick}
           disabled={disabled}
         >
@@ -2720,7 +2719,7 @@ function UploadCard({
   children: React.ReactNode;
 }) {
   return (
-    <Card className="border-border bg-card p-5 shadow-[var(--shadow-soft)] transition-shadow hover:shadow-[var(--shadow-elegant)]">
+    <Card className="border-white/45 bg-[var(--gradient-card)] p-5 shadow-[var(--shadow-soft)] transition-shadow hover:shadow-[var(--shadow-elegant)]">
       <div className="mb-4 flex items-start justify-between">
         <div>
           <div className="flex items-center gap-2 text-xs font-bold uppercase text-primary">
@@ -2728,7 +2727,7 @@ function UploadCard({
             {ready && <Check className="h-3.5 w-3.5 text-success" />}
           </div>
           <h2 className="mt-1 flex items-center gap-2 text-lg font-semibold text-foreground">
-            <span className="flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <span className="flex h-7 w-7 items-center justify-center rounded-xl bg-card text-primary shadow-[var(--shadow-inset)]">
               {icon}
             </span>
             {title}
@@ -2741,8 +2740,8 @@ function UploadCard({
         </Button>
       </div>
       <div
-        className={`min-h-24 rounded-md border border-dashed p-3 ${
-          ready ? "border-success/40 bg-success/5" : "border-border bg-muted/30"
+        className={`min-h-24 rounded-2xl border p-3 shadow-[var(--shadow-inset)] ${
+          ready ? "border-success/35 bg-success/5" : "border-white/40 bg-muted/35"
         }`}
       >
         {children}
@@ -2771,16 +2770,16 @@ function FilePill({
 }) {
   return (
     <div
-      className={`flex items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm ${
+      className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2 text-sm shadow-[var(--shadow-inset)] ${
         color === "primary"
-          ? "border-primary/30 bg-primary/5 text-foreground"
-          : "border-accent bg-accent/40 text-accent-foreground"
+          ? "border-primary/25 bg-primary/5 text-foreground"
+          : "border-accent/40 bg-accent/30 text-accent-foreground"
       }`}
     >
       <span className="truncate">{name}</span>
       <button
         onClick={onRemove}
-        className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-background hover:text-destructive"
+        className="rounded-lg p-0.5 text-muted-foreground transition-colors hover:bg-background hover:text-destructive"
         aria-label={`Remove ${name}`}
       >
         <X className="h-3.5 w-3.5" />
@@ -2800,10 +2799,10 @@ function StatusChip({
 }) {
   return (
     <div
-      className={`inline-flex min-h-9 items-center gap-2 rounded-md border px-3 text-xs font-medium ${
+      className={`inline-flex min-h-9 items-center gap-2 rounded-xl border px-3 text-xs font-medium shadow-[var(--shadow-soft)] ${
         active
           ? "border-success/30 bg-success/10 text-foreground"
-          : "border-border bg-muted/40 text-muted-foreground"
+          : "border-white/40 bg-muted/35 text-muted-foreground"
       }`}
     >
       {icon}
@@ -2819,7 +2818,7 @@ function ChecklistItem({ done, label }: { done: boolean; label: string }) {
         className={`flex h-5 w-5 items-center justify-center rounded-full border ${
           done
             ? "border-success bg-success text-success-foreground"
-            : "border-border bg-muted text-muted-foreground"
+            : "border-white/40 bg-muted text-muted-foreground shadow-[var(--shadow-inset)]"
         }`}
       >
         {done && <Check className="h-3 w-3" />}
@@ -2839,7 +2838,7 @@ function CompactMetric({
   value: number | string;
 }) {
   return (
-    <div className="rounded-md border border-border bg-muted/25 p-3">
+    <div className="rounded-2xl border border-white/40 bg-muted/25 p-3 shadow-[var(--shadow-inset)]">
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
         <span className="text-primary">{icon}</span>
         {label}
@@ -2860,8 +2859,8 @@ function Stat({
 }) {
   return (
     <div
-      className={`rounded-md border p-4 ${
-        tone === "warning" ? "border-warning/40 bg-warning/10" : "border-border bg-muted/30"
+      className={`rounded-2xl border p-4 shadow-[var(--shadow-inset)] ${
+        tone === "warning" ? "border-warning/40 bg-warning/10" : "border-white/40 bg-muted/30"
       }`}
     >
       <div className="text-xs uppercase tracking-wider text-muted-foreground">{label}</div>
