@@ -27,12 +27,29 @@ export interface SyncResult {
 export interface GeneratedReportSyncInput {
   id: string;
   fileName: string;
+  createdAt?: string;
   reportType?: string;
   dates: string[];
   pdfCount: number;
   totalEmployees: number;
   matchedEmployees: number;
   size: number;
+  blob: Blob;
+}
+
+export interface GeneratedReportHistoryItem {
+  id: string;
+  fileName: string;
+  createdAt: string;
+  reportType?: string;
+  dates: string[];
+  pdfCount: number;
+  totalEmployees: number;
+  matchedEmployees: number;
+  size: number;
+}
+
+export interface StoredGeneratedReportHistoryItem extends GeneratedReportHistoryItem {
   blob: Blob;
 }
 
@@ -455,13 +472,17 @@ export async function syncGeneratedReportToDatabase(
   report: GeneratedReportSyncInput,
 ): Promise<void> {
   const fileHash = await hashBlob(report.blob);
-  const createdAt = new Date().toISOString();
+  const createdAt = report.createdAt ?? new Date().toISOString();
+  const updatedAt = new Date().toISOString();
   const firstDate = firstValidDate(report.dates);
+  const user = await currentAuthUser();
+  const fileData = await blobToBase64(report.blob);
 
   try {
     const generatedResult = await table("generated_reports").upsert(
       {
-        report_key: fileHash,
+        report_key: user ? `${user.id}:${fileHash}` : fileHash,
+        user_id: user?.id ?? null,
         local_history_id: report.id,
         file_name: report.fileName,
         report_type: report.reportType ?? "Report",
@@ -471,8 +492,10 @@ export async function syncGeneratedReportToDatabase(
         matched_employees: report.matchedEmployees,
         file_size: report.size,
         file_hash: fileHash,
+        mime_type: report.blob.type || XLSX_MIME_TYPE,
+        file_data: fileData,
         created_at: createdAt,
-        updated_at: createdAt,
+        updated_at: updatedAt,
       },
       { onConflict: "report_key" },
     );
@@ -506,11 +529,132 @@ export async function syncGeneratedReportToDatabase(
   }
 }
 
+export async function listGeneratedReportsFromDatabase(): Promise<GeneratedReportHistoryItem[]> {
+  const user = await currentAuthUser();
+  if (!user) return [];
+
+  const { data, error } = await supabase
+    .from("generated_reports")
+    .select(
+      "id, local_history_id, file_name, report_type, dates, pdf_count, total_employees, matched_employees, file_size, created_at",
+    )
+    .eq("user_id", user.id)
+    .order("created_at", { ascending: false });
+
+  if (error) throw error;
+  return (data ?? []).map((row) => ({
+    id: row.local_history_id || row.id,
+    fileName: row.file_name,
+    createdAt: row.created_at,
+    reportType: row.report_type,
+    dates: jsonStringArray(row.dates),
+    pdfCount: row.pdf_count,
+    totalEmployees: row.total_employees,
+    matchedEmployees: row.matched_employees,
+    size: row.file_size,
+  }));
+}
+
+export async function getGeneratedReportFromDatabase(
+  id: string,
+): Promise<StoredGeneratedReportHistoryItem | null> {
+  const user = await currentAuthUser();
+  if (!user) return null;
+
+  const row = await findGeneratedReportRow(id, user.id);
+  if (!row?.file_data) return null;
+
+  return {
+    id: row.local_history_id || row.id,
+    fileName: row.file_name,
+    createdAt: row.created_at,
+    reportType: row.report_type,
+    dates: jsonStringArray(row.dates),
+    pdfCount: row.pdf_count,
+    totalEmployees: row.total_employees,
+    matchedEmployees: row.matched_employees,
+    size: row.file_size,
+    blob: base64ToBlob(row.file_data, row.mime_type || XLSX_MIME_TYPE),
+  };
+}
+
+export async function deleteGeneratedReportFromDatabase(id: string): Promise<void> {
+  const user = await currentAuthUser();
+  if (!user) return;
+
+  const row = await findGeneratedReportRow(id, user.id);
+  if (!row) return;
+
+  const { error } = await supabase
+    .from("generated_reports")
+    .delete()
+    .eq("id", row.id)
+    .eq("user_id", user.id);
+  if (error) throw error;
+}
+
 async function hashBlob(blob: Blob): Promise<string> {
   const buffer = await blob.arrayBuffer();
   const digest = await crypto.subtle.digest("SHA-256", buffer);
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
+
+async function currentAuthUser(): Promise<User | null> {
+  const { data, error } = await supabase.auth.getUser();
+  if (error) return null;
+  return data.user ?? null;
+}
+
+async function findGeneratedReportRow(id: string, userId: string) {
+  const columns =
+    "id, local_history_id, file_name, report_type, dates, pdf_count, total_employees, matched_employees, file_size, created_at, mime_type, file_data";
+  const byLocalId = await supabase
+    .from("generated_reports")
+    .select(columns)
+    .eq("user_id", userId)
+    .eq("local_history_id", id)
+    .maybeSingle();
+  if (byLocalId.error) throw byLocalId.error;
+  if (byLocalId.data) return byLocalId.data;
+
+  const byId = await supabase
+    .from("generated_reports")
+    .select(columns)
+    .eq("user_id", userId)
+    .eq("id", id)
+    .maybeSingle();
+  if (byId.error) throw byId.error;
+  return byId.data;
+}
+
+async function blobToBase64(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function base64ToBlob(base64: string, type: string): Blob {
+  const binary = atob(base64);
+  const chunks: Uint8Array[] = [];
+  const chunkSize = 0x8000;
+  for (let index = 0; index < binary.length; index += chunkSize) {
+    const chunk = binary.slice(index, index + chunkSize);
+    chunks.push(Uint8Array.from(chunk, (char) => char.charCodeAt(0)));
+  }
+  return new Blob(chunks, { type });
+}
+
+function jsonStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+const XLSX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
 function firstValidDate(dates: string[]): string | null {
   return dates.find((date) => /^\d{4}-\d{2}-\d{2}$/.test(date)) ?? null;

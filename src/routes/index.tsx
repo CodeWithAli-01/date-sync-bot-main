@@ -59,6 +59,9 @@ import {
   syncToDatabase,
   syncGeneratedReportToDatabase,
   syncAuthUserToDatabase,
+  listGeneratedReportsFromDatabase,
+  getGeneratedReportFromDatabase,
+  deleteGeneratedReportFromDatabase,
   findProcessedHashes,
   type EmployeeInput,
 } from "@/lib/db-sync";
@@ -3046,10 +3049,18 @@ async function syncStoredReportHistoryToDatabase(): Promise<void> {
 }
 
 async function listReportHistory(): Promise<ReportHistoryItem[]> {
-  const items = await listStoredReportHistory();
-  return items
-    .map(({ blob: _blob, ...meta }) => meta)
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  const [storedItems, databaseItems] = await Promise.all([
+    listStoredReportHistory(),
+    listGeneratedReportsFromDatabase(),
+  ]);
+  const itemsById = new Map<string, ReportHistoryItem>();
+
+  for (const item of databaseItems) itemsById.set(item.id, item);
+  for (const { blob: _blob, ...meta } of storedItems) itemsById.set(meta.id, meta);
+
+  return [...itemsById.values()].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+  );
 }
 
 async function getReportHistory(id: string): Promise<StoredReportHistoryItem | null> {
@@ -3061,7 +3072,12 @@ async function getReportHistory(id: string): Promise<StoredReportHistoryItem | n
     request.onerror = () => reject(request.error);
   });
   db.close();
-  return item ?? null;
+  if (item) return item;
+
+  const databaseItem = await getGeneratedReportFromDatabase(id);
+  if (!databaseItem) return null;
+  await addReportHistory(databaseItem);
+  return databaseItem;
 }
 
 async function deleteReportHistory(id: string): Promise<void> {
@@ -3073,6 +3089,7 @@ async function deleteReportHistory(id: string): Promise<void> {
     tx.onerror = () => reject(tx.error);
   });
   db.close();
+  await deleteGeneratedReportFromDatabase(id);
 }
 
 function formatHistoryDate(value: string): string {
