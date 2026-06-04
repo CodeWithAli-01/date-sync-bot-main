@@ -1,5 +1,6 @@
 // UPSERT-only PostgreSQL sync for the Pharma Selfie Reporting System.
 import { supabase } from "@/integrations/supabase/client";
+import type { User } from "@supabase/supabase-js";
 import type { PdfParseResult } from "./pdf-extractor";
 
 export interface EmployeeInput {
@@ -35,6 +36,10 @@ export interface GeneratedReportSyncInput {
   blob: Blob;
 }
 
+export interface AuthUserSyncResult {
+  synced: boolean;
+}
+
 interface EmployeeRow extends EmployeeInput {
   nameKey: string;
   cleanNameKey: string;
@@ -63,6 +68,39 @@ type LooseQuery = {
 
 function table(name: string): LooseQuery {
   return supabase.from(name as "employees") as unknown as LooseQuery;
+}
+
+export async function syncAuthUserToDatabase(user: User): Promise<AuthUserSyncResult> {
+  const metadata = user.user_metadata ?? {};
+  const appMetadata = user.app_metadata ?? {};
+  const displayName =
+    stringValue(metadata.name) ||
+    stringValue(metadata.full_name) ||
+    stringValue(metadata.display_name) ||
+    user.email?.split("@")[0] ||
+    null;
+
+  const result = await table("users").upsert(
+    {
+      id: user.id,
+      email: user.email ?? null,
+      phone: user.phone ?? null,
+      display_name: displayName,
+      avatar_url: stringValue(metadata.avatar_url) || stringValue(metadata.picture) || null,
+      provider: stringValue(appMetadata.provider) || null,
+      last_sign_in_at: user.last_sign_in_at ?? null,
+      created_at: user.created_at ?? new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "id" },
+  );
+
+  if (result.error) throw result.error;
+  return { synced: true };
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 function normalize(s: string): string {

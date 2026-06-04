@@ -59,6 +59,7 @@ import {
 import {
   syncToDatabase,
   syncGeneratedReportToDatabase,
+  syncAuthUserToDatabase,
   findProcessedHashes,
   type EmployeeInput,
 } from "@/lib/db-sync";
@@ -245,6 +246,9 @@ function HomePage() {
 
   useEffect(() => {
     if (!authUser) return;
+    void syncAuthUserToDatabase(authUser).catch((error) => {
+      console.warn("Auth user database sync failed", error);
+    });
     void syncStoredReportHistoryToDatabase();
   }, [authUser]);
 
@@ -2375,7 +2379,8 @@ function DashboardHome({
   const totalFiles = historyItems.reduce((sum, item) => sum + Math.max(item.pdfCount, 1), 0);
   const totalEmployees = historyItems.reduce((sum, item) => sum + item.totalEmployees, 0);
   const totalMatched = historyItems.reduce((sum, item) => sum + item.matchedEmployees, 0);
-  const matchRate = totalEmployees ? Math.round((totalMatched / totalEmployees) * 100) : 0;
+  const hasMatchData = totalEmployees > 0;
+  const matchRate = hasMatchData ? Math.round((totalMatched / totalEmployees) * 100) : 0;
   const totalSize = historyItems.reduce((sum, item) => sum + item.size, 0);
   const reportMix = buildReportMix(historyItems);
 
@@ -2404,7 +2409,11 @@ function DashboardHome({
             </div>
           </div>
           <div className="neuro-inset flex min-h-44 items-center justify-center p-4 sm:min-h-48 sm:p-5">
-            <CircularProgress value={matchRate} label="Match rate" />
+            <CircularProgress
+              value={matchRate}
+              label={hasMatchData ? "Match rate" : "No data"}
+              displayValue={hasMatchData ? `${matchRate}%` : "-"}
+            />
           </div>
         </div>
       </section>
@@ -2430,9 +2439,9 @@ function DashboardHome({
         />
         <DashboardMetric
           icon={<TrendingUp className="h-5 w-5" />}
-          label="Quality score"
-          value={`${matchRate}%`}
-          hint="Across saved reports"
+          label="Match rate"
+          value={hasMatchData ? `${matchRate}%` : "-"}
+          hint={hasMatchData ? "Matched / total employees" : "No saved report rows yet"}
         />
       </section>
 
@@ -2663,7 +2672,15 @@ function DashboardMetric({
   );
 }
 
-function CircularProgress({ value, label }: { value: number; label: string }) {
+function CircularProgress({
+  value,
+  label,
+  displayValue,
+}: {
+  value: number;
+  label: string;
+  displayValue?: string;
+}) {
   const clamped = Math.max(0, Math.min(100, value));
   return (
     <div className="relative flex h-36 w-36 items-center justify-center rounded-full shadow-[var(--shadow-elegant)] sm:h-40 sm:w-40">
@@ -2675,7 +2692,9 @@ function CircularProgress({ value, label }: { value: number; label: string }) {
       />
       <div className="absolute inset-4 rounded-full bg-card shadow-[var(--shadow-inset)]" />
       <div className="relative text-center">
-        <div className="text-2xl font-bold text-foreground sm:text-3xl">{clamped}%</div>
+        <div className="text-2xl font-bold text-foreground sm:text-3xl">
+          {displayValue ?? `${clamped}%`}
+        </div>
         <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           {label}
         </div>
