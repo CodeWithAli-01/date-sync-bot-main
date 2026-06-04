@@ -279,4 +279,86 @@
     border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
     background: color-mix(in srgb, var(--card) 90%, var(--background));
   }
+
+  .app-sidebar {
+    inset-inline: 0.5rem;
+    top: 0.5rem;
+    max-height: calc(100svh - 1rem);
+  }
+
+  .app-sidebar-nav {
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    mask-image: linear-gradient(
+      90deg,
+      transparent 0,
+      black 1rem,
+      black calc(100% - 1rem),
+      transparent
+    );
+  }
+
+  .app-sidebar-nav::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@media (min-width: 640px) {
+  .app-sidebar {
+    inset-inline: 0.75rem;
+    top: 0.75rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .app-sidebar {
+    inset-inline: auto;
+    top: 1rem;
+    max-height: calc(100svh - 2rem);
+  }
+
+  .app-sidebar-nav {
+    mask-image: none;
+  }
+}
+
+@media (max-width: 639px) {
+  :root {
+    --shadow-soft: 7px 7px 16px oklch(0.66 0.035 215 / 0.28), -7px -7px 16px oklch(1 0 0 / 0.82);
+    --shadow-elegant:
+      11px 11px 24px oklch(0.58 0.04 215 / 0.32), -9px -9px 22px oklch(1 0 0 / 0.86);
+    --shadow-inset:
+      inset 5px 5px 10px oklch(0.63 0.035 215 / 0.24), inset -5px -5px 10px oklch(1 0 0 / 0.76);
+  }
+
+  .dark {
+    --shadow-soft: 7px 7px 16px oklch(0 0 0 / 0.5), -6px -6px 16px oklch(1 0 0 / 0.06);
+    --shadow-elegant: 11px 11px 24px oklch(0 0 0 / 0.6), -8px -8px 20px oklch(1 0 0 / 0.065);
+    --shadow-inset:
+      inset 5px 5px 10px oklch(0 0 0 / 0.52), inset -5px -5px 10px oklch(1 0 0 / 0.055);
+  }
+
+  .neuro-panel,
+  .neuro-hero {
+    border-radius: 1rem;
+  }
+
+  button,
+  a,
+  input,
+  select,
+  textarea {
+    touch-action: manipulation;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
 }

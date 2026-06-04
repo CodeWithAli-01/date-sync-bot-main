@@ -23,6 +23,18 @@ export interface SyncResult {
   parsingErrors: number;
 }
 
+export interface GeneratedReportSyncInput {
+  id: string;
+  fileName: string;
+  reportType?: string;
+  dates: string[];
+  pdfCount: number;
+  totalEmployees: number;
+  matchedEmployees: number;
+  size: number;
+  blob: Blob;
+}
+
 interface EmployeeRow extends EmployeeInput {
   nameKey: string;
   cleanNameKey: string;
@@ -399,4 +411,69 @@ export async function findProcessedHashes(hashes: string[]): Promise<Set<string>
   if (!hashes.length) return new Set();
   const { data } = await table("report_files").select("file_hash").in("file_hash", hashes);
   return new Set((data ?? []).map((d) => String(d.file_hash)));
+}
+
+export async function syncGeneratedReportToDatabase(
+  report: GeneratedReportSyncInput,
+): Promise<void> {
+  const fileHash = await hashBlob(report.blob);
+  const createdAt = new Date().toISOString();
+  const firstDate = firstValidDate(report.dates);
+
+  try {
+    const generatedResult = await table("generated_reports").upsert(
+      {
+        report_key: fileHash,
+        local_history_id: report.id,
+        file_name: report.fileName,
+        report_type: report.reportType ?? "Report",
+        dates: report.dates,
+        pdf_count: report.pdfCount,
+        total_employees: report.totalEmployees,
+        matched_employees: report.matchedEmployees,
+        file_size: report.size,
+        file_hash: fileHash,
+        created_at: createdAt,
+        updated_at: createdAt,
+      },
+      { onConflict: "report_key" },
+    );
+    if (generatedResult.error) throw generatedResult.error;
+    return;
+  } catch (error) {
+    console.warn("generated_reports sync failed, falling back to report_files", error);
+  }
+
+  const fileResult = await table("report_files").upsert(
+    {
+      file_name: report.fileName,
+      file_hash: fileHash,
+      report_date: firstDate,
+      status: "done",
+      processed_status: "done",
+    },
+    { onConflict: "file_hash" },
+  );
+  if (fileResult.error) throw fileResult.error;
+
+  if (firstDate) {
+    const reportResult = await table("reports").upsert(
+      {
+        date: firstDate,
+        file_name: report.fileName,
+      },
+      { onConflict: "date,file_name" },
+    );
+    if (reportResult.error) throw reportResult.error;
+  }
+}
+
+async function hashBlob(blob: Blob): Promise<string> {
+  const buffer = await blob.arrayBuffer();
+  const digest = await crypto.subtle.digest("SHA-256", buffer);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function firstValidDate(dates: string[]): string | null {
+  return dates.find((date) => /^\d{4}-\d{2}-\d{2}$/.test(date)) ?? null;
 }

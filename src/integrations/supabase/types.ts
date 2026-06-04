@@ -8,6 +8,54 @@ export type Database = {
   };
   public: {
     Tables: {
+      generated_reports: {
+        Row: {
+          created_at: string;
+          dates: Json;
+          file_hash: string;
+          file_name: string;
+          file_size: number;
+          id: string;
+          local_history_id: string | null;
+          matched_employees: number;
+          pdf_count: number;
+          report_key: string;
+          report_type: string;
+          total_employees: number;
+          updated_at: string;
+        };
+        Insert: {
+          created_at?: string;
+          dates?: Json;
+          file_hash: string;
+          file_name: string;
+          file_size?: number;
+          id?: string;
+          local_history_id?: string | null;
+          matched_employees?: number;
+          pdf_count?: number;
+          report_key: string;
+          report_type?: string;
+          total_employees?: number;
+          updated_at?: string;
+        };
+        Update: {
+          created_at?: string;
+          dates?: Json;
+          file_hash?: string;
+          file_name?: string;
+          file_size?: number;
+          id?: string;
+          local_history_id?: string | null;
+          matched_employees?: number;
+          pdf_count?: number;
+          report_key?: string;
+          report_type?: string;
+          total_employees?: number;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
       employees: {
         Row: {
           created_at: string;

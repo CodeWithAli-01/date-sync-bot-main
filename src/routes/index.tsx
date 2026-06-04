@@ -56,7 +56,12 @@ import {
   processMonthlyPlannedReport,
   type MonthlyPlannedResult,
 } from "@/lib/monthly-planned-processor";
-import { syncToDatabase, findProcessedHashes, type EmployeeInput } from "@/lib/db-sync";
+import {
+  syncToDatabase,
+  syncGeneratedReportToDatabase,
+  findProcessedHashes,
+  type EmployeeInput,
+} from "@/lib/db-sync";
 
 interface PreviewCell {
   key: string;
@@ -238,6 +243,11 @@ function HomePage() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!authUser) return;
+    void syncStoredReportHistoryToDatabase();
+  }, [authUser]);
+
   const updateThemeColor = (color: string) => {
     setThemeColor(color);
     applyThemeColor(color);
@@ -349,7 +359,7 @@ function HomePage() {
   const saveReportToHistory = useCallback(
     async (nextReport: ProcessReport) => {
       try {
-        await addReportHistory({
+        await saveReportHistoryAndDatabase({
           id: crypto.randomUUID(),
           fileName: nextReport.fileName.replace(/\.xlsx$/i, "") + " - Updated.xlsx",
           createdAt: new Date().toISOString(),
@@ -537,7 +547,7 @@ function HomePage() {
     try {
       const result = await processDailyReport(callLogFile, dailyTemplateFile);
       setDailyReport(result);
-      await addReportHistory({
+      await saveReportHistoryAndDatabase({
         id: crypto.randomUUID(),
         fileName: result.fileName,
         createdAt: new Date().toISOString(),
@@ -604,7 +614,7 @@ function HomePage() {
     try {
       const result = await processDoctorCoverageReport(coverageSourceFile, coverageTemplateFile);
       setCoverageReport(result);
-      await addReportHistory({
+      await saveReportHistoryAndDatabase({
         id: crypto.randomUUID(),
         fileName: result.fileName,
         createdAt: new Date().toISOString(),
@@ -678,7 +688,7 @@ function HomePage() {
         monthlyPlannedTemplateFile,
       );
       setMonthlyPlannedReport(result);
-      await addReportHistory({
+      await saveReportHistoryAndDatabase({
         id: crypto.randomUUID(),
         fileName: result.fileName,
         createdAt: new Date().toISOString(),
@@ -1789,8 +1799,8 @@ function HomePage() {
         description="PDF to Excel report workbench."
       />
 
-        <main className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
-          <div className="space-y-6">
+      <main className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="space-y-6">
           <div className="grid gap-4 sm:grid-cols-2">
             <UploadCard
               step={1}
@@ -2206,11 +2216,11 @@ function AppShell({
   return (
     <div className="min-h-screen bg-background text-foreground">
       <Toaster richColors position="top-center" />
-      <aside className="neuro-sidebar fixed inset-x-3 top-3 z-40 flex h-auto flex-col rounded-2xl p-3 lg:inset-y-4 lg:left-4 lg:right-auto lg:w-72">
+      <aside className="neuro-sidebar app-sidebar fixed z-40 flex h-auto flex-col rounded-2xl p-2 sm:p-3 lg:inset-y-4 lg:left-4 lg:right-auto lg:w-72">
         <button
           type="button"
           onClick={() => onNavigate(null)}
-          className="neuro-brand flex w-full items-center gap-3 rounded-xl p-3 text-left transition"
+          className="neuro-brand flex w-full items-center gap-3 rounded-xl p-2.5 text-left transition sm:p-3"
         >
           <BrandMark icon={<Activity className="h-5 w-5" />} />
           <div className="min-w-0">
@@ -2219,7 +2229,7 @@ function AppShell({
           </div>
         </button>
 
-        <nav className="mt-3 grid grid-cols-3 gap-2 lg:flex lg:flex-1 lg:flex-col">
+        <nav className="app-sidebar-nav mt-2 flex gap-2 overflow-x-auto pb-1 lg:mt-3 lg:flex-1 lg:flex-col lg:overflow-visible lg:pb-0">
           <SidebarButton
             active={!activeModule}
             icon={<Home className="h-4 w-4" />}
@@ -2244,12 +2254,20 @@ function AppShell({
             description="Files"
             onClick={onOpenHistory}
           />
+          <SidebarButton
+            active={activeModule === "profile"}
+            icon={<UserCircle className="h-4 w-4" />}
+            label="Profile"
+            description="Theme"
+            onClick={() => onNavigate("profile")}
+            className="lg:hidden"
+          />
         </nav>
 
         <button
           type="button"
           onClick={() => onNavigate("profile")}
-          className={`neuro-user mt-3 flex items-center gap-3 rounded-xl p-3 text-left transition ${
+          className={`neuro-user mt-3 hidden items-center gap-3 rounded-xl p-3 text-left transition lg:flex ${
             activeModule === "profile" ? "is-active" : ""
           }`}
         >
@@ -2265,7 +2283,7 @@ function AppShell({
         </button>
       </aside>
 
-      <div className="px-4 pb-8 pt-40 sm:px-6 lg:ml-80 lg:px-8 lg:pt-8">
+      <div className="px-3 pb-8 pt-40 sm:px-5 md:pt-36 lg:ml-80 lg:px-8 lg:pt-8">
         <div className="mx-auto max-w-[1540px] animate-in fade-in slide-in-from-bottom-2 duration-500">
           {children}
         </div>
@@ -2280,27 +2298,33 @@ function SidebarButton({
   label,
   description,
   onClick,
+  className = "",
 }: {
   active: boolean;
   icon: React.ReactNode;
   label: string;
   description: string;
   onClick: () => void;
+  className?: string;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`neuro-nav-item group flex min-h-14 items-center gap-3 rounded-xl px-3 py-2 text-left transition ${
+      className={`neuro-nav-item group flex min-w-[4.9rem] flex-col items-center justify-center gap-1 rounded-xl px-2 py-2 text-center transition sm:min-w-[5.6rem] lg:min-h-14 lg:w-full lg:min-w-0 lg:flex-row lg:justify-start lg:gap-3 lg:px-3 lg:text-left ${
         active ? "is-active" : ""
-      }`}
+      } ${className}`}
     >
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-primary transition group-hover:scale-105">
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-primary transition group-hover:scale-105 lg:h-9 lg:w-9">
         {icon}
       </span>
-      <span className="hidden min-w-0 lg:block">
-        <span className="block truncate text-sm font-semibold">{label}</span>
-        <span className="block truncate text-xs text-muted-foreground">{description}</span>
+      <span className="block min-w-0">
+        <span className="block max-w-[4.6rem] truncate text-[0.7rem] font-semibold leading-tight sm:max-w-[5.1rem] lg:max-w-none lg:text-sm">
+          {label}
+        </span>
+        <span className="hidden truncate text-xs text-muted-foreground lg:block">
+          {description}
+        </span>
       </span>
     </button>
   );
@@ -2318,17 +2342,18 @@ function ModulePageHeader({
   description: string;
 }) {
   return (
-    <section className="neuro-panel mb-6 p-5">
+    <section className="neuro-panel mb-5 p-4 sm:mb-6 sm:p-5">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-4">
+        <div className="flex min-w-0 items-center gap-3 sm:gap-4">
           <BrandMark icon={icon} />
-          <div>
+          <div className="min-w-0">
             <div className="text-xs font-bold uppercase tracking-wide text-primary">{label}</div>
-            <h1 className="mt-1 text-2xl font-bold text-foreground">{title}</h1>
+            <h1 className="mt-1 break-words text-xl font-bold text-foreground sm:text-2xl">
+              {title}
+            </h1>
             <p className="text-sm text-muted-foreground">{description}</p>
           </div>
         </div>
-        
       </div>
     </section>
   );
@@ -2356,18 +2381,18 @@ function DashboardHome({
 
   return (
     <main className="space-y-6">
-      <section className="neuro-hero p-6">
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
+      <section className="neuro-hero p-4 sm:p-6">
+        <div className="grid min-w-0 gap-5 lg:grid-cols-[minmax(0,1fr)_320px] xl:grid-cols-[minmax(0,1fr)_360px]">
           <div>
             <div className="text-xs font-bold uppercase tracking-wide text-primary">
               Admin dashboard
             </div>
-            <h1 className="mt-2 text-3xl font-bold text-foreground sm:text-4xl">{APP_NAME}</h1>
+            <h1 className="mt-2 text-2xl font-bold text-foreground sm:text-4xl">{APP_NAME}</h1>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">
               Monitor report activity, open tools from the sidebar, and keep generated files moving
               through a cleaner reporting workflow.
             </p>
-            <div className="mt-5 flex flex-wrap gap-3">
+            <div className="mt-5 grid gap-3 sm:flex sm:flex-wrap">
               <Button onClick={() => onNavigate("monthly-report")} className="neuro-button">
                 <Zap className="mr-2 h-4 w-4" />
                 Start monthly report
@@ -2378,7 +2403,7 @@ function DashboardHome({
               </Button>
             </div>
           </div>
-          <div className="neuro-inset flex min-h-48 items-center justify-center p-5">
+          <div className="neuro-inset flex min-h-44 items-center justify-center p-4 sm:min-h-48 sm:p-5">
             <CircularProgress value={matchRate} label="Match rate" />
           </div>
         </div>
@@ -2413,7 +2438,7 @@ function DashboardHome({
 
       <section className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
         <div className="neuro-panel p-5">
-          <div className="mb-5 flex items-center justify-between">
+          <div className="mb-5 flex items-center justify-between gap-3">
             <div>
               <div className="text-xs font-bold uppercase tracking-wide text-primary">Activity</div>
               <h2 className="text-lg font-semibold text-foreground">Recent report flow</h2>
@@ -2444,7 +2469,7 @@ function DashboardHome({
         </div>
 
         <div className="neuro-panel p-5">
-          <div className="mb-5 flex items-center justify-between">
+          <div className="mb-5 flex items-center justify-between gap-3">
             <div>
               <div className="text-xs font-bold uppercase tracking-wide text-primary">Mix</div>
               <h2 className="text-lg font-semibold text-foreground">Report categories</h2>
@@ -2466,7 +2491,7 @@ function DashboardHome({
       </section>
 
       <section className="neuro-panel p-5">
-        <div className="mb-5 flex items-center justify-between">
+        <div className="mb-5 flex items-center justify-between gap-3">
           <div>
             <div className="text-xs font-bold uppercase tracking-wide text-primary">Logs</div>
             <h2 className="text-lg font-semibold text-foreground">Latest saved reports</h2>
@@ -2480,7 +2505,7 @@ function DashboardHome({
                 key={item.id}
                 type="button"
                 onClick={onOpenHistory}
-                className="neuro-list-row grid gap-3 rounded-xl p-4 text-left transition md:grid-cols-[minmax(0,1fr)_140px_120px]"
+                className="neuro-list-row grid gap-2 rounded-xl p-4 text-left transition md:grid-cols-[minmax(0,1fr)_140px_120px] md:gap-3"
               >
                 <div className="min-w-0">
                   <div className="truncate text-sm font-semibold text-foreground">
@@ -2525,15 +2550,17 @@ function ProfilePage({
   onSignOut: () => void;
 }) {
   return (
-    <main className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
-      <section className="neuro-panel p-6">
-        <div className="flex items-center gap-4">
+    <main className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
+      <section className="neuro-panel p-4 sm:p-6">
+        <div className="flex min-w-0 items-center gap-3 sm:gap-4">
           <BrandMark icon={<UserCircle className="h-5 w-5" />} />
-          <div>
+          <div className="min-w-0">
             <div className="text-xs font-bold uppercase tracking-wide text-primary">
               User profile
             </div>
-            <h1 className="mt-1 text-2xl font-bold text-foreground">{user.email ?? "Account"}</h1>
+            <h1 className="mt-1 break-all text-xl font-bold text-foreground sm:text-2xl">
+              {user.email ?? "Account"}
+            </h1>
             <p className="text-sm text-muted-foreground">
               Account controls and interface settings.
             </p>
@@ -2622,7 +2649,7 @@ function DashboardMetric({
   hint: string;
 }) {
   return (
-    <div className="neuro-panel p-5 transition hover:-translate-y-0.5">
+    <div className="neuro-panel p-4 transition hover:-translate-y-0.5 sm:p-5">
       <div className="mb-4 flex items-center justify-between">
         <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-[var(--shadow-soft)]">
           {icon}
@@ -2639,7 +2666,7 @@ function DashboardMetric({
 function CircularProgress({ value, label }: { value: number; label: string }) {
   const clamped = Math.max(0, Math.min(100, value));
   return (
-    <div className="relative flex h-40 w-40 items-center justify-center rounded-full shadow-[var(--shadow-elegant)]">
+    <div className="relative flex h-36 w-36 items-center justify-center rounded-full shadow-[var(--shadow-elegant)] sm:h-40 sm:w-40">
       <div
         className="absolute inset-0 rounded-full"
         style={{
@@ -2648,7 +2675,7 @@ function CircularProgress({ value, label }: { value: number; label: string }) {
       />
       <div className="absolute inset-4 rounded-full bg-card shadow-[var(--shadow-inset)]" />
       <div className="relative text-center">
-        <div className="text-3xl font-bold text-foreground">{clamped}%</div>
+        <div className="text-2xl font-bold text-foreground sm:text-3xl">{clamped}%</div>
         <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           {label}
         </div>
@@ -2759,12 +2786,12 @@ function AuthScreen({
   return (
     <div className="min-h-screen bg-background">
       <Toaster richColors position="top-center" />
-      <main className="mx-auto flex min-h-screen max-w-[1720px] items-center justify-center px-5 py-14 sm:px-8">
-        <Card className="neuro-panel w-full max-w-md border-border bg-card p-6">
+      <main className="mx-auto flex min-h-screen max-w-[1720px] items-center justify-center px-3 py-8 sm:px-8 sm:py-14">
+        <Card className="neuro-panel w-full max-w-md border-border bg-card p-4 sm:p-6">
           <div className="mb-6 flex items-center gap-3">
             <BrandMark icon={<ShieldCheck className="h-5 w-5" />} />
             <div>
-              <h1 className="text-xl font-bold text-foreground">{APP_NAME}</h1>
+              <h1 className="text-lg font-bold text-foreground sm:text-xl">{APP_NAME}</h1>
               <p className="text-sm text-muted-foreground">Sign in to continue</p>
             </div>
           </div>
@@ -2950,7 +2977,16 @@ async function addReportHistory(item: StoredReportHistoryItem): Promise<void> {
   db.close();
 }
 
-async function listReportHistory(): Promise<ReportHistoryItem[]> {
+async function saveReportHistoryAndDatabase(item: StoredReportHistoryItem): Promise<void> {
+  await addReportHistory(item);
+  try {
+    await syncGeneratedReportToDatabase(item);
+  } catch (error) {
+    console.warn("Generated report database sync failed", error);
+  }
+}
+
+async function listStoredReportHistory(): Promise<StoredReportHistoryItem[]> {
   const db = await openReportHistoryDb();
   const items = await new Promise<StoredReportHistoryItem[]>((resolve, reject) => {
     const tx = db.transaction(REPORT_HISTORY_STORE, "readonly");
@@ -2959,6 +2995,26 @@ async function listReportHistory(): Promise<ReportHistoryItem[]> {
     request.onerror = () => reject(request.error);
   });
   db.close();
+  return items.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+}
+
+async function syncStoredReportHistoryToDatabase(): Promise<void> {
+  try {
+    const items = await listStoredReportHistory();
+    for (const item of items) {
+      try {
+        await syncGeneratedReportToDatabase(item);
+      } catch (error) {
+        console.warn("Stored report database backfill failed", item.fileName, error);
+      }
+    }
+  } catch (error) {
+    console.warn("Unable to read stored report history for database backfill", error);
+  }
+}
+
+async function listReportHistory(): Promise<ReportHistoryItem[]> {
+  const items = await listStoredReportHistory();
   return items
     .map(({ blob: _blob, ...meta }) => meta)
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -3382,14 +3438,16 @@ function PreviewTable({
   if (!preview) return null;
 
   return (
-    <table className="border-collapse text-xs">
+    <table className="min-w-max border-collapse text-xs">
       <tbody>
         {preview.rows.map((row, rowIndex) => (
           <tr key={`row-${rowIndex}`}>
             {row.map((cell) => (
               <td key={cell.key} className="min-w-24 p-0 align-middle" style={cell.style}>
                 {readOnly ? (
-                  <div className="min-h-8 min-w-24 px-2 py-1 text-inherit">{cell.value}</div>
+                  <div className="min-h-8 min-w-24 whitespace-nowrap px-2 py-1 text-inherit">
+                    {cell.value}
+                  </div>
                 ) : (
                   <input
                     className="h-full min-h-8 w-full min-w-24 bg-transparent px-2 py-1 text-inherit outline-none focus:bg-primary/10 focus:ring-1 focus:ring-primary"
@@ -3429,22 +3487,22 @@ function UploadCard({
   children: React.ReactNode;
 }) {
   return (
-    <Card className="border-white/45 bg-[var(--gradient-card)] p-5 shadow-[var(--shadow-soft)] transition-shadow hover:shadow-[var(--shadow-elegant)]">
-      <div className="mb-4 flex items-start justify-between">
-        <div>
+    <Card className="border-white/45 bg-[var(--gradient-card)] p-4 shadow-[var(--shadow-soft)] transition-shadow hover:shadow-[var(--shadow-elegant)] sm:p-5">
+      <div className="mb-4 flex flex-col items-start justify-between gap-3 sm:flex-row">
+        <div className="min-w-0">
           <div className="flex items-center gap-2 text-xs font-bold uppercase text-primary">
             Step {step}
             {ready && <Check className="h-3.5 w-3.5 text-success" />}
           </div>
-          <h2 className="mt-1 flex items-center gap-2 text-lg font-semibold text-foreground">
+          <h2 className="mt-1 flex items-center gap-2 text-base font-semibold text-foreground sm:text-lg">
             <span className="flex h-7 w-7 items-center justify-center rounded-xl bg-card text-primary shadow-[var(--shadow-inset)]">
               {icon}
             </span>
-            {title}
+            <span className="min-w-0 break-words">{title}</span>
           </h2>
           <p className="text-sm text-muted-foreground">{subtitle}</p>
         </div>
-        <Button variant="outline" size="sm" onClick={onClick}>
+        <Button variant="outline" size="sm" onClick={onClick} className="w-full sm:w-auto">
           <Upload className="mr-1.5 h-3.5 w-3.5" />
           Upload
         </Button>
@@ -3480,13 +3538,13 @@ function FilePill({
 }) {
   return (
     <div
-      className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2 text-sm shadow-[var(--shadow-inset)] ${
+      className={`flex min-w-0 items-center justify-between gap-2 rounded-xl border px-3 py-2 text-sm shadow-[var(--shadow-inset)] ${
         color === "primary"
           ? "border-primary/25 bg-primary/5 text-foreground"
           : "border-accent/40 bg-accent/30 text-accent-foreground"
       }`}
     >
-      <span className="truncate">{name}</span>
+      <span className="min-w-0 truncate">{name}</span>
       <button
         onClick={onRemove}
         className="rounded-lg p-0.5 text-muted-foreground transition-colors hover:bg-background hover:text-destructive"
@@ -3509,21 +3567,21 @@ function StatusChip({
 }) {
   return (
     <div
-      className={`inline-flex min-h-9 items-center gap-2 rounded-xl border px-3 text-xs font-medium shadow-[var(--shadow-soft)] ${
+      className={`inline-flex min-h-9 max-w-full items-center gap-2 rounded-xl border px-3 text-xs font-medium shadow-[var(--shadow-soft)] ${
         active
           ? "border-success/30 bg-success/10 text-foreground"
           : "border-white/40 bg-muted/35 text-muted-foreground"
       }`}
     >
       {icon}
-      {label}
+      <span className="truncate">{label}</span>
     </div>
   );
 }
 
 function ChecklistItem({ done, label }: { done: boolean; label: string }) {
   return (
-    <div className="flex items-center gap-2 text-sm">
+    <div className="flex min-w-0 items-center gap-2 text-sm">
       <span
         className={`flex h-5 w-5 items-center justify-center rounded-full border ${
           done
@@ -3533,7 +3591,9 @@ function ChecklistItem({ done, label }: { done: boolean; label: string }) {
       >
         {done && <Check className="h-3 w-3" />}
       </span>
-      <span className={done ? "text-foreground" : "text-muted-foreground"}>{label}</span>
+      <span className={done ? "min-w-0 text-foreground" : "min-w-0 text-muted-foreground"}>
+        {label}
+      </span>
     </div>
   );
 }
@@ -3553,7 +3613,7 @@ function CompactMetric({
         <span className="text-primary">{icon}</span>
         {label}
       </div>
-      <div className="mt-1 text-xl font-bold text-foreground">{value}</div>
+      <div className="mt-1 break-words text-xl font-bold text-foreground">{value}</div>
     </div>
   );
 }
@@ -3574,7 +3634,7 @@ function Stat({
       }`}
     >
       <div className="text-xs uppercase tracking-wider text-muted-foreground">{label}</div>
-      <div className="mt-1 text-2xl font-bold text-foreground">{value}</div>
+      <div className="mt-1 break-words text-2xl font-bold text-foreground">{value}</div>
     </div>
   );
 }
