@@ -63,6 +63,7 @@ interface EmployeeRow extends EmployeeInput {
 }
 
 interface DailyRecordInput {
+  user_id: string;
   employee_code: string;
   report_date: string;
   selfie_text: string;
@@ -337,6 +338,7 @@ function findEmployee(
 }
 
 export async function syncToDatabase(opts: SyncInput): Promise<SyncResult> {
+  const user = await requireAuthUser();
   const { employees, pdfResults, failedFiles = [] } = opts;
   const indexes = buildEmployeeIndexes(employees);
   let skippedRows = 0;
@@ -345,6 +347,7 @@ export async function syncToDatabase(opts: SyncInput): Promise<SyncResult> {
   if (employeesWithCodes.length) {
     await table("employees").upsert(
       employeesWithCodes.map((e) => ({
+        user_id: user.id,
         employee_code: e.code,
         name: e.name,
         region: e.region,
@@ -354,7 +357,7 @@ export async function syncToDatabase(opts: SyncInput): Promise<SyncResult> {
         original_order: e.originalOrder,
         updated_at: new Date().toISOString(),
       })),
-      { onConflict: "employee_code" },
+      { onConflict: "user_id,employee_code" },
     );
   }
 
@@ -363,13 +366,14 @@ export async function syncToDatabase(opts: SyncInput): Promise<SyncResult> {
     const { data } = await table("report_files")
       .upsert(
         {
+          user_id: user.id,
           file_name: r.fileName,
           file_hash: r.fileHash,
           report_date: r.date,
           status: "done",
           processed_status: "done",
         },
-        { onConflict: "file_hash" },
+        { onConflict: "user_id,file_hash" },
       )
       .select("id")
       .maybeSingle();
@@ -393,6 +397,7 @@ export async function syncToDatabase(opts: SyncInput): Promise<SyncResult> {
       const selfieCount = existing ? Math.max(existing.selfie_count, row.count) : row.count;
       const totalCount = existing ? Math.max(existing.total_count, row.total) : row.total;
       recordByKey.set(key, {
+        user_id: user.id,
         employee_code: employee.code,
         report_date: pdf.date,
         selfie_count: selfieCount,
@@ -404,16 +409,20 @@ export async function syncToDatabase(opts: SyncInput): Promise<SyncResult> {
     }
   }
 
-  const records = await preserveExistingPositiveValues([...recordByKey.values()]);
+  const records = await preserveExistingPositiveValues(user.id, [...recordByKey.values()]);
   for (let i = 0; i < records.length; i += 500) {
     await table("daily_records").upsert(records.slice(i, i + 500), {
-      onConflict: "employee_code,report_date",
+      onConflict: "user_id,employee_code,report_date",
     });
   }
 
   if (failedFiles.length) {
     await table("error_logs").insert(
-      failedFiles.map((f) => ({ file_name: f.fileName, error_message: f.error })),
+      failedFiles.map((f) => ({
+        user_id: user.id,
+        file_name: f.fileName,
+        error_message: f.error,
+      })),
     );
   }
 
@@ -425,6 +434,7 @@ export async function syncToDatabase(opts: SyncInput): Promise<SyncResult> {
 }
 
 async function preserveExistingPositiveValues(
+  userId: string,
   records: DailyRecordInput[],
 ): Promise<DailyRecordInput[]> {
   if (!records.length) return records;
@@ -433,6 +443,7 @@ async function preserveExistingPositiveValues(
   const dates = [...new Set(records.map((r) => r.report_date))];
   const { data } = await table("daily_records")
     .select("employee_code,report_date,selfie_count,total_count")
+    .eq("user_id", userId)
     .in("employee_code", codes)
     .in("report_date", dates);
 
@@ -464,7 +475,12 @@ async function preserveExistingPositiveValues(
 
 export async function findProcessedHashes(hashes: string[]): Promise<Set<string>> {
   if (!hashes.length) return new Set();
-  const { data } = await table("report_files").select("file_hash").in("file_hash", hashes);
+  const user = await currentAuthUser();
+  if (!user) return new Set();
+  const { data } = await table("report_files")
+    .select("file_hash")
+    .eq("user_id", user.id)
+    .in("file_hash", hashes);
   return new Set((data ?? []).map((d) => String(d.file_hash)));
 }
 
@@ -475,7 +491,7 @@ export async function syncGeneratedReportToDatabase(
   const createdAt = report.createdAt ?? new Date().toISOString();
   const updatedAt = new Date().toISOString();
   const firstDate = firstValidDate(report.dates);
-  const user = await currentAuthUser();
+  const user = await requireAuthUser();
   const fileData = await blobToBase64(report.blob);
 
   try {
@@ -507,23 +523,25 @@ export async function syncGeneratedReportToDatabase(
 
   const fileResult = await table("report_files").upsert(
     {
+      user_id: user.id,
       file_name: report.fileName,
       file_hash: fileHash,
       report_date: firstDate,
       status: "done",
       processed_status: "done",
     },
-    { onConflict: "file_hash" },
+    { onConflict: "user_id,file_hash" },
   );
   if (fileResult.error) throw fileResult.error;
 
   if (firstDate) {
     const reportResult = await table("reports").upsert(
       {
+        user_id: user.id,
         date: firstDate,
         file_name: report.fileName,
       },
-      { onConflict: "date,file_name" },
+      { onConflict: "user_id,date,file_name" },
     );
     if (reportResult.error) throw reportResult.error;
   }
@@ -603,6 +621,12 @@ async function currentAuthUser(): Promise<User | null> {
   const { data, error } = await supabase.auth.getUser();
   if (error) return null;
   return data.user ?? null;
+}
+
+async function requireAuthUser(): Promise<User> {
+  const user = await currentAuthUser();
+  if (!user) throw new Error("You must be signed in to sync report data.");
+  return user;
 }
 
 async function findGeneratedReportRow(id: string, userId: string) {

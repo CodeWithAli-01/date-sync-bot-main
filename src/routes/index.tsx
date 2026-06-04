@@ -92,6 +92,7 @@ type ActiveModule =
 
 interface ReportHistoryItem {
   id: string;
+  userId?: string;
   fileName: string;
   createdAt: string;
   reportType?: string;
@@ -386,16 +387,21 @@ function HomePage() {
     : null;
 
   const refreshHistory = useCallback(async () => {
+    if (!authUser) {
+      setHistoryItems([]);
+      return;
+    }
+
     setHistoryLoading(true);
     try {
-      setHistoryItems(await listReportHistory());
+      setHistoryItems(await listReportHistory(authUser.id));
     } catch (error) {
       console.error("History load failed", error);
       toast.error("Unable to load report history.");
     } finally {
       setHistoryLoading(false);
     }
-  }, []);
+  }, [authUser]);
 
   const openHistory = useCallback(() => {
     setActiveModule("history");
@@ -411,7 +417,7 @@ function HomePage() {
     }
 
     void (async () => {
-      await syncStoredReportHistoryToDatabase();
+      await syncStoredReportHistoryToDatabase(authUser.id);
       await refreshHistory();
     })();
   }, [authUser, refreshHistory]);
@@ -426,9 +432,11 @@ function HomePage() {
 
   const saveReportToHistory = useCallback(
     async (nextReport: ProcessReport) => {
+      if (!authUser) throw new Error("You must be signed in to save report history.");
       try {
         await saveReportHistoryAndDatabase({
           id: crypto.randomUUID(),
+          userId: authUser.id,
           fileName: nextReport.fileName.replace(/\.xlsx$/i, "") + " - Updated.xlsx",
           createdAt: new Date().toISOString(),
           reportType: "Monthly Report",
@@ -445,7 +453,7 @@ function HomePage() {
         toast.warning("Report ready, but history save failed.");
       }
     },
-    [activeModule, pdfFiles.length, refreshHistory],
+    [activeModule, authUser, pdfFiles.length, refreshHistory],
   );
 
   const onProcess = useCallback(async () => {
@@ -817,8 +825,9 @@ function HomePage() {
   };
 
   const downloadHistoryItem = async (id: string) => {
+    if (!authUser) return;
     try {
-      const item = await getReportHistory(id);
+      const item = await getReportHistory(id, authUser.id);
       if (!item) {
         toast.error("History file not found.");
         await refreshHistory();
@@ -839,10 +848,11 @@ function HomePage() {
   };
 
   const previewHistoryItem = async (id: string) => {
+    if (!authUser) return;
     setHistoryPreviewLoading(true);
     setHistoryPreview(null);
     try {
-      const item = await getReportHistory(id);
+      const item = await getReportHistory(id, authUser.id);
       if (!item) {
         toast.error("History file not found.");
         await refreshHistory();
@@ -859,8 +869,9 @@ function HomePage() {
   };
 
   const removeHistoryItem = async (id: string) => {
+    if (!authUser) return;
     try {
-      await deleteReportHistory(id);
+      await deleteReportHistory(id, authUser.id);
       await refreshHistory();
       setHistoryPreview(null);
       toast.success("History file removed.");
@@ -3088,7 +3099,7 @@ async function saveReportHistoryAndDatabase(item: StoredReportHistoryItem): Prom
   }
 }
 
-async function listStoredReportHistory(): Promise<StoredReportHistoryItem[]> {
+async function listStoredReportHistory(userId: string): Promise<StoredReportHistoryItem[]> {
   const db = await openReportHistoryDb();
   const items = await new Promise<StoredReportHistoryItem[]>((resolve, reject) => {
     const tx = db.transaction(REPORT_HISTORY_STORE, "readonly");
@@ -3097,12 +3108,14 @@ async function listStoredReportHistory(): Promise<StoredReportHistoryItem[]> {
     request.onerror = () => reject(request.error);
   });
   db.close();
-  return items.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  return items
+    .filter((item) => item.userId === userId)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 }
 
-async function syncStoredReportHistoryToDatabase(): Promise<void> {
+async function syncStoredReportHistoryToDatabase(userId: string): Promise<void> {
   try {
-    const items = await listStoredReportHistory();
+    const items = await listStoredReportHistory(userId);
     for (const item of items) {
       try {
         await syncGeneratedReportToDatabase(item);
@@ -3115,9 +3128,9 @@ async function syncStoredReportHistoryToDatabase(): Promise<void> {
   }
 }
 
-async function listReportHistory(): Promise<ReportHistoryItem[]> {
+async function listReportHistory(userId: string): Promise<ReportHistoryItem[]> {
   const [storedItems, databaseItems] = await Promise.all([
-    listStoredReportHistory(),
+    listStoredReportHistory(userId),
     listGeneratedReportsFromDatabase(),
   ]);
   const itemsById = new Map<string, ReportHistoryItem>();
@@ -3130,7 +3143,10 @@ async function listReportHistory(): Promise<ReportHistoryItem[]> {
   );
 }
 
-async function getReportHistory(id: string): Promise<StoredReportHistoryItem | null> {
+async function getReportHistory(
+  id: string,
+  userId: string,
+): Promise<StoredReportHistoryItem | null> {
   const db = await openReportHistoryDb();
   const item = await new Promise<StoredReportHistoryItem | undefined>((resolve, reject) => {
     const tx = db.transaction(REPORT_HISTORY_STORE, "readonly");
@@ -3139,19 +3155,26 @@ async function getReportHistory(id: string): Promise<StoredReportHistoryItem | n
     request.onerror = () => reject(request.error);
   });
   db.close();
-  if (item) return item;
+  if (item?.userId === userId) return item;
 
   const databaseItem = await getGeneratedReportFromDatabase(id);
   if (!databaseItem) return null;
-  await addReportHistory(databaseItem);
-  return databaseItem;
+  const scopedItem = { ...databaseItem, userId };
+  await addReportHistory(scopedItem);
+  return scopedItem;
 }
 
-async function deleteReportHistory(id: string): Promise<void> {
+async function deleteReportHistory(id: string, userId: string): Promise<void> {
   const db = await openReportHistoryDb();
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(REPORT_HISTORY_STORE, "readwrite");
-    tx.objectStore(REPORT_HISTORY_STORE).delete(id);
+    const store = tx.objectStore(REPORT_HISTORY_STORE);
+    const request = store.get(id);
+    request.onsuccess = () => {
+      const item = request.result as StoredReportHistoryItem | undefined;
+      if (item?.userId === userId) store.delete(id);
+    };
+    request.onerror = () => reject(request.error);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });

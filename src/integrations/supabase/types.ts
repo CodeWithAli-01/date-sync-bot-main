@@ -178,6 +178,7 @@ export type Database = {
           name: string;
           status: string;
           updated_at: string;
+          user_id: string | null;
         };
         Insert: {
           created_at?: string;
@@ -186,6 +187,7 @@ export type Database = {
           name: string;
           status?: string;
           updated_at?: string;
+          user_id?: string | null;
         };
         Update: {
           created_at?: string;
@@ -194,6 +196,7 @@ export type Database = {
           name?: string;
           status?: string;
           updated_at?: string;
+          user_id?: string | null;
         };
         Relationships: [];
       };
@@ -203,18 +206,21 @@ export type Database = {
           error_message: string;
           file_name: string | null;
           id: string;
+          user_id: string | null;
         };
         Insert: {
           created_at?: string;
           error_message: string;
           file_name?: string | null;
           id?: string;
+          user_id?: string | null;
         };
         Update: {
           created_at?: string;
           error_message?: string;
           file_name?: string | null;
           id?: string;
+          user_id?: string | null;
         };
         Relationships: [];
       };
@@ -226,6 +232,7 @@ export type Database = {
           processed_status: string;
           report_date: string | null;
           upload_date: string;
+          user_id: string | null;
         };
         Insert: {
           file_hash: string;
@@ -234,6 +241,7 @@ export type Database = {
           processed_status?: string;
           report_date?: string | null;
           upload_date?: string;
+          user_id?: string | null;
         };
         Update: {
           file_hash?: string;
@@ -242,6 +250,7 @@ export type Database = {
           processed_status?: string;
           report_date?: string | null;
           upload_date?: string;
+          user_id?: string | null;
         };
         Relationships: [];
       };
@@ -251,18 +260,21 @@ export type Database = {
           date: string;
           file_name: string;
           id: string;
+          user_id: string | null;
         };
         Insert: {
           created_at?: string;
           date: string;
           file_name: string;
           id?: string;
+          user_id?: string | null;
         };
         Update: {
           created_at?: string;
           date?: string;
           file_name?: string;
           id?: string;
+          user_id?: string | null;
         };
         Relationships: [];
       };
@@ -275,6 +287,7 @@ export type Database = {
           employee_name: string;
           id: string;
           source_file_id: string | null;
+          user_id: string | null;
         };
         Insert: {
           count?: number;
@@ -284,6 +297,7 @@ export type Database = {
           employee_name: string;
           id?: string;
           source_file_id?: string | null;
+          user_id?: string | null;
         };
         Update: {
           count?: number;
@@ -293,6 +307,7 @@ export type Database = {
           employee_name?: string;
           id?: string;
           source_file_id?: string | null;
+          user_id?: string | null;
         };
         Relationships: [];
       };
