@@ -65,6 +65,7 @@ import {
   findProcessedHashes,
   type EmployeeInput,
 } from "@/lib/db-sync";
+import { enforceDeviceLimit, revokeCurrentDeviceSession } from "@/lib/device-auth";
 
 interface PreviewCell {
   key: string;
@@ -223,21 +224,65 @@ function HomePage() {
   useEffect(() => {
     let mounted = true;
 
-    void supabase.auth.getSession().then(({ data, error }) => {
+    void supabase.auth.getSession().then(async ({ data, error }) => {
       if (!mounted) return;
       if (error) {
         console.error("Supabase session load failed", error);
         toast.error("Unable to check your login session.");
       }
-      setAuthUser(data.session?.user ?? null);
+
+      if (data.session) {
+        try {
+          const deviceResult = await enforceDeviceLimit(data.session);
+          if (!mounted) return;
+          if (!deviceResult.allowed) {
+            setAuthUser(null);
+            toast.error(deviceResult.message ?? "This account is already active on 2 devices.");
+          } else {
+            setAuthUser(data.session.user);
+          }
+        } catch (deviceError) {
+          console.error("Device login check failed", deviceError);
+          await supabase.auth.signOut();
+          if (!mounted) return;
+          setAuthUser(null);
+          toast.error("Unable to verify this device session.");
+        }
+      } else {
+        setAuthUser(null);
+      }
       setAuthLoading(false);
     });
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setAuthUser(session?.user ?? null);
-      setAuthLoading(false);
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "SIGNED_OUT" || !session) {
+        setAuthUser(null);
+        setAuthLoading(false);
+        return;
+      }
+
+      void enforceDeviceLimit(session)
+        .then((deviceResult) => {
+          if (!mounted) return;
+          if (!deviceResult.allowed) {
+            setAuthUser(null);
+            toast.error(deviceResult.message ?? "This account is already active on 2 devices.");
+            return;
+          }
+          setAuthUser(session.user);
+        })
+        .catch(async (deviceError) => {
+          console.error("Device login check failed", deviceError);
+          await supabase.auth.signOut();
+          if (!mounted) return;
+          setAuthUser(null);
+          toast.error("Unable to verify this device session.");
+        })
+        .finally(() => {
+          if (mounted) setAuthLoading(false);
+        });
     });
 
     return () => {
@@ -270,6 +315,9 @@ function HomePage() {
   const signOut = useCallback(async () => {
     setSigningOut(true);
     try {
+      await revokeCurrentDeviceSession().catch((error) => {
+        console.warn("Unable to revoke device session before sign out", error);
+      });
       const { error } = await supabase.auth.signOut();
       if (error) throw error;
       setActiveModule(null);
@@ -2808,6 +2856,13 @@ function AuthScreen({
       if (isSignup && !result.data.session) {
         toast.success("Account created. Check your email to confirm your login.");
       } else {
+        if (result.data.session) {
+          const deviceResult = await enforceDeviceLimit(result.data.session);
+          if (!deviceResult.allowed) {
+            toast.error(deviceResult.message ?? "This account is already active on 2 devices.");
+            return;
+          }
+        }
         toast.success("Signed in.");
       }
     } catch (error) {

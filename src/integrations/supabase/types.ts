@@ -8,6 +8,75 @@ export type Database = {
   };
   public: {
     Tables: {
+      auth_device_sessions: {
+        Row: {
+          created_at: string;
+          device_id: string;
+          first_seen_at: string;
+          id: string;
+          last_seen_at: string;
+          revoked_at: string | null;
+          updated_at: string;
+          user_agent: string | null;
+          user_id: string;
+        };
+        Insert: {
+          created_at?: string;
+          device_id: string;
+          first_seen_at?: string;
+          id?: string;
+          last_seen_at?: string;
+          revoked_at?: string | null;
+          updated_at?: string;
+          user_agent?: string | null;
+          user_id: string;
+        };
+        Update: {
+          created_at?: string;
+          device_id?: string;
+          first_seen_at?: string;
+          id?: string;
+          last_seen_at?: string;
+          revoked_at?: string | null;
+          updated_at?: string;
+          user_agent?: string | null;
+          user_id?: string;
+        };
+        Relationships: [];
+      };
+      auth_login_alerts: {
+        Row: {
+          attempted_at: string;
+          created_at: string;
+          device_id: string | null;
+          email: string | null;
+          email_sent_at: string | null;
+          id: string;
+          user_agent: string | null;
+          user_id: string;
+        };
+        Insert: {
+          attempted_at?: string;
+          created_at?: string;
+          device_id?: string | null;
+          email?: string | null;
+          email_sent_at?: string | null;
+          id?: string;
+          user_agent?: string | null;
+          user_id: string;
+        };
+        Update: {
+          attempted_at?: string;
+          created_at?: string;
+          device_id?: string | null;
+          email?: string | null;
+          email_sent_at?: string | null;
+          id?: string;
+          user_agent?: string | null;
+          user_id?: string;
+        };
+        Relationships: [];
+      };
       generated_reports: {
         Row: {
           created_at: string;
@@ -232,7 +301,23 @@ export type Database = {
       [_ in never]: never;
     };
     Functions: {
-      [_ in never]: never;
+      claim_auth_device: {
+        Args: {
+          p_device_id: string;
+          p_user_agent?: string | null;
+        };
+        Returns: Json;
+      };
+      mark_latest_login_alert_sent: {
+        Args: Record<PropertyKey, never>;
+        Returns: undefined;
+      };
+      revoke_auth_device: {
+        Args: {
+          p_device_id: string;
+        };
+        Returns: undefined;
+      };
     };
     Enums: {
       [_ in never]: never;
