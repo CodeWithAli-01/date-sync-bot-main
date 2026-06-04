@@ -34,7 +34,6 @@ import {
   Database,
   LineChart,
   PieChart,
-  TrendingUp,
   Users,
   Zap,
 } from "lucide-react";
@@ -2385,6 +2384,10 @@ function DashboardHome({
   const totalMatched = historyItems.reduce((sum, item) => sum + item.matchedEmployees, 0);
   const hasMatchData = totalEmployees > 0;
   const matchRate = hasMatchData ? Math.round((totalMatched / totalEmployees) * 100) : 0;
+  const reviewQueue = historyItems.reduce(
+    (sum, item) => sum + Math.max(item.totalEmployees - item.matchedEmployees, 0),
+    0,
+  );
   const totalSize = historyItems.reduce((sum, item) => sum + item.size, 0);
   const reportMix = buildReportMix(historyItems);
 
@@ -2442,10 +2445,16 @@ function DashboardHome({
           hint={formatBytes(totalSize)}
         />
         <DashboardMetric
-          icon={<TrendingUp className="h-5 w-5" />}
-          label="Match rate"
-          value={hasMatchData ? `${matchRate}%` : "-"}
-          hint={hasMatchData ? "Matched / total employees" : "No saved report rows yet"}
+          icon={<AlertTriangle className="h-5 w-5" />}
+          label="Needs review"
+          value={hasMatchData ? reviewQueue : "-"}
+          hint={
+            hasMatchData
+              ? reviewQueue
+                ? "Unmatched employees"
+                : "All matched cleanly"
+              : "No saved report rows yet"
+          }
         />
       </section>
 
@@ -2512,7 +2521,7 @@ function DashboardHome({
           <Clock3 className="h-5 w-5 text-primary" />
         </div>
         {latestItems.length ? (
-          <div className="grid gap-3">
+          <div className="dashboard-logs-scroll grid max-h-[19rem] gap-3 overflow-y-auto pr-1">
             {latestItems.map((item) => (
               <button
                 key={item.id}
