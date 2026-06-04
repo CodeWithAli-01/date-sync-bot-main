@@ -36,10 +36,10 @@
 }
 
 :root {
-  --radius: 0.75rem;
+  --radius: 0.5rem;
 
-  --background: oklch(0.985 0.005 240);
-  --foreground: oklch(0.18 0.04 250);
+  --background: oklch(0.975 0.012 205);
+  --foreground: oklch(0.18 0.035 230);
 
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.18 0.04 250);
@@ -47,9 +47,9 @@
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.18 0.04 250);
 
-  --primary: oklch(0.52 0.18 255);
-  --primary-foreground: oklch(0.99 0.005 240);
-  --primary-glow: oklch(0.68 0.18 255);
+  --primary: oklch(0.43 0.12 190);
+  --primary-foreground: #ffffff;
+  --primary-glow: oklch(0.66 0.13 185);
 
   --secondary: oklch(0.96 0.01 250);
   --secondary-foreground: oklch(0.25 0.04 250);
@@ -57,8 +57,8 @@
   --muted: oklch(0.96 0.01 250);
   --muted-foreground: oklch(0.5 0.03 250);
 
-  --accent: oklch(0.93 0.04 255);
-  --accent-foreground: oklch(0.25 0.08 255);
+  --accent: oklch(0.43 0.12 190);
+  --accent-foreground: oklch(0.99 0.005 240);
 
   --success: oklch(0.65 0.17 155);
   --success-foreground: oklch(0.99 0.005 240);
@@ -69,31 +69,31 @@
   --destructive: oklch(0.6 0.22 25);
   --destructive-foreground: oklch(0.99 0.005 240);
 
-  --border: oklch(0.92 0.01 250);
-  --input: oklch(0.92 0.01 250);
-  --ring: oklch(0.52 0.18 255);
+  --border: oklch(0.88 0.018 220);
+  --input: oklch(0.88 0.018 220);
+  --ring: oklch(0.43 0.12 190);
 
-  --gradient-hero: linear-gradient(135deg, oklch(0.52 0.18 255), oklch(0.62 0.20 285));
-  --gradient-card: linear-gradient(180deg, oklch(1 0 0), oklch(0.98 0.01 250));
-  --shadow-elegant: 0 10px 40px -10px oklch(0.52 0.18 255 / 0.25);
-  --shadow-soft: 0 2px 12px -4px oklch(0.18 0.04 250 / 0.08);
+  --gradient-hero: linear-gradient(135deg, oklch(0.43 0.12 190), oklch(0.74 0.16 35));
+  --header-surface: var(--primary);
+  --header-foreground: #ffffff;
+  --header-muted: #b9fff2;
+  --gradient-card: linear-gradient(180deg, oklch(1 0 0), oklch(0.985 0.012 205));
+  --shadow-elegant: 0 14px 38px -18px oklch(0.28 0.08 210 / 0.34);
+  --shadow-soft: 0 8px 24px -18px oklch(0.18 0.04 250 / 0.22);
 }
 
 .dark {
-  --background: oklch(0.15 0.03 250);
+  --background: oklch(0.16 0.028 240);
   --foreground: oklch(0.98 0.005 240);
-  --card: oklch(0.2 0.03 250);
+  --card: oklch(0.22 0.026 240);
   --card-foreground: oklch(0.98 0.005 240);
-  --popover: oklch(0.2 0.03 250);
+  --popover: oklch(0.22 0.026 240);
   --popover-foreground: oklch(0.98 0.005 240);
-  --primary: oklch(0.68 0.18 255);
-  --primary-foreground: oklch(0.15 0.03 250);
-  --primary-glow: oklch(0.75 0.16 255);
   --secondary: oklch(0.27 0.03 250);
   --secondary-foreground: oklch(0.98 0.005 240);
   --muted: oklch(0.27 0.03 250);
   --muted-foreground: oklch(0.7 0.02 250);
-  --accent: oklch(0.3 0.06 255);
+  --accent: oklch(0.34 0.07 190);
   --accent-foreground: oklch(0.98 0.005 240);
   --success: oklch(0.65 0.17 155);
   --success-foreground: oklch(0.99 0.005 240);
@@ -103,7 +103,11 @@
   --destructive-foreground: oklch(0.99 0.005 240);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.68 0.18 255);
+  --gradient-card: linear-gradient(180deg, oklch(0.24 0.026 240), oklch(0.19 0.028 240));
+  --header-surface: var(--primary);
+  --header-foreground: oklch(0.98 0.005 240);
+  --header-muted: oklch(0.78 0.09 185);
+  --shadow-soft: 0 10px 28px -20px oklch(0 0 0 / 0.7);
 }
 
 @layer base {
@@ -114,5 +118,50 @@
     background-color: var(--color-background);
     color: var(--color-foreground);
     font-feature-settings: "cv11", "ss01";
+    min-height: 100vh;
+    overflow-x: hidden;
+    overscroll-behavior-y: none;
+    scrollbar-gutter: stable;
   }
+  html {
+    overscroll-behavior-y: none;
+    scroll-behavior: smooth;
+  }
+  ::selection {
+    background-color: color-mix(in srgb, var(--primary) 22%, transparent);
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: color-mix(in srgb, var(--background) 86%, var(--primary));
+  }
+  ::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--primary) 45%, var(--background));
+    border: 2px solid var(--background);
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--primary);
+  }
+  :where(.overflow-auto, .overflow-y-auto) {
+    overscroll-behavior: contain;
+    scrollbar-color: color-mix(in srgb, var(--primary) 50%, var(--background)) transparent;
+    scrollbar-width: thin;
+  }
+  header {
+    position: relative;
+  }
+  header::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -1px;
+    height: 3px;
+    background: var(--gradient-hero);
+    opacity: 0.9;
+  }
+
 }

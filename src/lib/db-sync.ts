@@ -25,7 +25,7 @@ export interface SyncResult {
 
 interface EmployeeRow extends EmployeeInput {
   nameKey: string;
-  fuzzy: string;
+  cleanNameKey: string;
 }
 
 interface DailyRecordInput {
@@ -63,62 +63,210 @@ function fuzzyKey(s: string): string {
     .replace(/\s+/g, " ");
 }
 
-function similarity(a: string, b: string): number {
+function normalizeEmployeeCode(value: string | null): string | null {
+  const digits =
+    String(value ?? "")
+      .match(/\d+/g)
+      ?.join("") ?? "";
+  return digits.length >= 4 ? digits : null;
+}
+
+function codeSuffixes(code: string): string[] {
+  const out: string[] = [];
+  for (const len of [4, 5]) {
+    if (code.length > len) out.push(code.slice(-len));
+  }
+  return out;
+}
+
+function personNameKey(s: string): string {
+  const noise = new Set([
+    "mr",
+    "mrs",
+    "ms",
+    "dr",
+    "psv",
+    "mio",
+    "asm",
+    "rsm",
+    "sm",
+    "am",
+    "fm",
+    "tm",
+    "swt",
+    "hq",
+    "territory",
+    "location",
+    "locations",
+    "new",
+    "joining",
+    "resigned",
+    "meeting",
+    "grp",
+    "with",
+    "selfie",
+    "selfies",
+    "total",
+  ]);
+  return fuzzyKey(s.replace(/\b(new joining|resigned|meeting)\b.*$/i, " "))
+    .split(" ")
+    .filter((token) => token && !/^\d+$/.test(token) && !noise.has(token))
+    .join(" ");
+}
+
+function levenshteinSimilarity(a: string, b: string): number {
   if (a === b) return 1;
   if (!a.length || !b.length) return 0;
-  const m = a.length;
-  const n = b.length;
-  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
-  for (let i = 0; i <= m; i++) dp[i][0] = i;
-  for (let j = 0; j <= n; j++) dp[0][j] = j;
-  for (let i = 1; i <= m; i++) {
-    for (let j = 1; j <= n; j++) {
-      const c = a[i - 1] === b[j - 1] ? 0 : 1;
-      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + c);
+  const previous = Array.from({ length: b.length + 1 }, (_, i) => i);
+  const current = new Array<number>(b.length + 1);
+  for (let i = 1; i <= a.length; i++) {
+    current[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      current[j] = Math.min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + cost);
     }
+    previous.splice(0, previous.length, ...current);
   }
-  return 1 - dp[m][n] / Math.max(m, n);
+  return 1 - previous[b.length] / Math.max(a.length, b.length);
+}
+
+function tokenSimilarity(a: string, b: string): number {
+  const aTokens = a.split(" ").filter(Boolean);
+  const bTokens = b.split(" ").filter(Boolean);
+  if (!aTokens.length || !bTokens.length) return 0;
+  let overlap = 0;
+  for (const token of aTokens) {
+    if (bTokens.some((candidate) => tokensMatch(token, candidate))) overlap++;
+  }
+  return overlap / Math.max(aTokens.length, bTokens.length);
+}
+
+function tokensMatch(a: string, b: string): boolean {
+  if (a === b) return true;
+  if (a.length === 1 && b.startsWith(a)) return true;
+  if (b.length === 1 && a.startsWith(b)) return true;
+  return false;
+}
+
+function orderedTokenCoverage(shorter: string, longer: string): number {
+  const shortTokens = shorter.split(" ").filter(Boolean);
+  const longTokens = longer.split(" ").filter(Boolean);
+  if (!shortTokens.length || !longTokens.length) return 0;
+
+  let longIndex = 0;
+  let matched = 0;
+  for (const token of shortTokens) {
+    while (longIndex < longTokens.length && !tokensMatch(token, longTokens[longIndex])) {
+      longIndex++;
+    }
+    if (longIndex >= longTokens.length) continue;
+    matched++;
+    longIndex++;
+  }
+
+  return matched / shortTokens.length;
+}
+
+function nameMatchScore(a: string, b: string): number {
+  if (a === b) return 1;
+  const shorter = a.length <= b.length ? a : b;
+  const longer = a.length <= b.length ? b : a;
+  const coverage = orderedTokenCoverage(shorter, longer);
+  const tokenScore = tokenSimilarity(a, b);
+  const editScore = levenshteinSimilarity(a, b);
+  return Math.max(tokenScore, editScore, coverage >= 1 ? 0.94 : coverage * 0.9);
 }
 
 function buildEmployeeIndexes(employees: EmployeeInput[]) {
   const rows: EmployeeRow[] = employees.map((e) => ({
     ...e,
-    code: e.code?.trim().toUpperCase() || null,
+    code: normalizeEmployeeCode(e.code),
     nameKey: normalize(e.name),
-    fuzzy: fuzzyKey(e.name),
+    cleanNameKey: personNameKey(e.name),
   }));
   const byCode = new Map<string, EmployeeRow>();
+  const byCodeSuffix = new Map<string, EmployeeRow>();
   const byName = new Map<string, EmployeeRow>();
+  const byCleanName = new Map<string, EmployeeRow>();
+  const duplicateCodes = new Set<string>();
+  const duplicateCodeSuffixes = new Set<string>();
+  const duplicateNames = new Set<string>();
+  const duplicateCleanNames = new Set<string>();
   for (const row of rows) {
-    if (row.code) byCode.set(row.code, row);
+    if (row.code) {
+      if (byCode.has(row.code)) duplicateCodes.add(row.code);
+      else byCode.set(row.code, row);
+      for (const suffix of [row.code, ...codeSuffixes(row.code)]) {
+        if (byCodeSuffix.has(suffix)) duplicateCodeSuffixes.add(suffix);
+        else byCodeSuffix.set(suffix, row);
+      }
+    }
+    if (byName.has(row.nameKey)) duplicateNames.add(row.nameKey);
     byName.set(row.nameKey, row);
+    if (byCleanName.has(row.cleanNameKey)) duplicateCleanNames.add(row.cleanNameKey);
+    byCleanName.set(row.cleanNameKey, row);
   }
-  return { rows, byCode, byName };
+  return {
+    rows,
+    byCode,
+    byCodeSuffix,
+    byName,
+    byCleanName,
+    duplicateCodes,
+    duplicateCodeSuffixes,
+    duplicateNames,
+    duplicateCleanNames,
+  };
 }
 
 function findEmployee(
   row: { code: string | null; name: string },
   indexes: ReturnType<typeof buildEmployeeIndexes>,
 ): EmployeeRow | null {
-  if (row.code) {
-    const byCode = indexes.byCode.get(row.code.toUpperCase());
+  const nameKey = normalize(row.name);
+  const cleanName = personNameKey(row.name);
+  const findByUniqueName = () => {
+    const byName = indexes.byName.get(nameKey);
+    if (byName && !indexes.duplicateNames.has(nameKey)) return byName;
+
+    const byCleanName = indexes.byCleanName.get(cleanName);
+    if (byCleanName && !indexes.duplicateCleanNames.has(cleanName)) return byCleanName;
+
+    const prefixMatches = indexes.rows.filter(
+      (employee) =>
+        employee.cleanNameKey.length >= 8 &&
+        !indexes.duplicateCleanNames.has(employee.cleanNameKey) &&
+        (cleanName.startsWith(`${employee.cleanNameKey} `) ||
+          employee.cleanNameKey.startsWith(`${cleanName} `)),
+    );
+
+    if (prefixMatches.length === 1) return prefixMatches[0];
+
+    const scored = indexes.rows
+      .map((employee) => ({
+        employee,
+        score: nameMatchScore(cleanName, employee.cleanNameKey),
+      }))
+      .filter((candidate) => candidate.score >= 0.86)
+      .sort((a, b) => b.score - a.score);
+
+    if (!scored.length) return null;
+    const [best, second] = scored;
+    return !second || best.score - second.score >= 0.05 ? best.employee : null;
+  };
+
+  const code = normalizeEmployeeCode(row.code);
+  if (code) {
+    const byCode = indexes.byCode.get(code);
     if (byCode) return byCode;
-  }
-
-  const byName = indexes.byName.get(normalize(row.name));
-  if (byName) return byName;
-
-  const target = fuzzyKey(row.name);
-  let best: EmployeeRow | null = null;
-  let bestScore = 0;
-  for (const employee of indexes.rows) {
-    const score = similarity(target, employee.fuzzy);
-    if (score > bestScore) {
-      bestScore = score;
-      best = employee;
+    for (const suffix of [code, ...codeSuffixes(code)]) {
+      const bySuffix = indexes.byCodeSuffix.get(suffix);
+      if (bySuffix && !indexes.duplicateCodeSuffixes.has(suffix)) return bySuffix;
     }
+    return findByUniqueName();
   }
-  return bestScore >= 0.85 ? best : null;
+
+  return findByUniqueName();
 }
 
 export async function syncToDatabase(opts: SyncInput): Promise<SyncResult> {

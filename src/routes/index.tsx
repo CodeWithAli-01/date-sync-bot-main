@@ -1,17 +1,28 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowLeft,
+  BarChart3,
+  CalendarDays,
+  Check,
   FileSpreadsheet,
   FileText,
+  History as HistoryIcon,
+  Moon,
+  Palette,
   Sparkles,
+  Sun,
   Upload,
   Download,
+  Eye,
+  Save,
   CheckCircle2,
   AlertTriangle,
   Loader2,
-  Camera,
   X,
-  Database,
+  ShieldCheck,
+  TableProperties,
+  Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -20,7 +31,76 @@ import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
 import { parsePdf, type PdfParseResult } from "@/lib/pdf-extractor";
 import { processExcel, type ProcessReport } from "@/lib/excel-processor";
+import { processDailyReport, type DailyReportResult } from "@/lib/daily-report-processor";
+import {
+  processDoctorCoverageReport,
+  type DoctorCoverageResult,
+} from "@/lib/doctor-coverage-processor";
+import {
+  processMonthlyPlannedReport,
+  type MonthlyPlannedResult,
+} from "@/lib/monthly-planned-processor";
 import { syncToDatabase, findProcessedHashes, type EmployeeInput } from "@/lib/db-sync";
+
+interface PreviewCell {
+  key: string;
+  rowNumber: number;
+  colNumber: number;
+  value: string;
+  style: React.CSSProperties;
+}
+
+interface SheetPreview {
+  name: string;
+  sheetName: string;
+  rows: PreviewCell[][];
+}
+
+type ActiveModule =
+  | "monthly-report"
+  | "daily-report"
+  | "doctor-coverage"
+  | "monthly-planned"
+  | "history"
+  | null;
+
+interface ReportHistoryItem {
+  id: string;
+  fileName: string;
+  createdAt: string;
+  reportType?: string;
+  dates: string[];
+  pdfCount: number;
+  totalEmployees: number;
+  matchedEmployees: number;
+  size: number;
+}
+
+interface StoredReportHistoryItem extends ReportHistoryItem {
+  blob: Blob;
+}
+
+const DASHBOARD_LINES = [
+  "Work smarter with clean reports and reliable matching.",
+  "Keep every report organized, accurate, and ready to share.",
+  "Choose a workflow and let the software handle the details.",
+  "Daily and monthly reports, prepared with confidence.",
+  "Your reporting workspace is ready.",
+];
+
+const DEFAULT_THEME_COLOR = "#0b6f6a";
+const THEME_COLORS = [
+  "#0b6f6a",
+  "#0f766e",
+  "#2563eb",
+  "#7c3aed",
+  "#db2777",
+  "#e43100",
+  "#ea580c",
+  "#ca8a04",
+  "#16a34a",
+  "#111827",
+];
 
 export const Route = createFileRoute("/")({
   component: HomePage,
@@ -37,6 +117,10 @@ export const Route = createFileRoute("/")({
 });
 
 function HomePage() {
+  const [activeModule, setActiveModule] = useState<ActiveModule>(null);
+  const [dashboardLine, setDashboardLine] = useState(DASHBOARD_LINES[0]);
+  const [themeColor, setThemeColor] = useState(DEFAULT_THEME_COLOR);
+  const [themeMode, setThemeMode] = useState<"light" | "dark">("light");
   const [excelFile, setExcelFile] = useState<File | null>(null);
   const [pdfFiles, setPdfFiles] = useState<File[]>([]);
   const [processing, setProcessing] = useState(false);
@@ -44,9 +128,80 @@ function HomePage() {
   const [progressLabel, setProgressLabel] = useState("");
   const [report, setReport] = useState<ProcessReport | null>(null);
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+  const [sheetPreview, setSheetPreview] = useState<SheetPreview | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewDirty, setPreviewDirty] = useState(false);
+  const [previewSaving, setPreviewSaving] = useState(false);
+  const [historyItems, setHistoryItems] = useState<ReportHistoryItem[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyPreview, setHistoryPreview] = useState<SheetPreview | null>(null);
+  const [historyPreviewLoading, setHistoryPreviewLoading] = useState(false);
+  const [callLogFile, setCallLogFile] = useState<File | null>(null);
+  const [dailyTemplateFile, setDailyTemplateFile] = useState<File | null>(null);
+  const [dailyProcessing, setDailyProcessing] = useState(false);
+  const [dailyReport, setDailyReport] = useState<DailyReportResult | null>(null);
+  const [dailyPreview, setDailyPreview] = useState<SheetPreview | null>(null);
+  const [dailyPreviewLoading, setDailyPreviewLoading] = useState(false);
+  const [coverageSourceFile, setCoverageSourceFile] = useState<File | null>(null);
+  const [coverageTemplateFile, setCoverageTemplateFile] = useState<File | null>(null);
+  const [coverageProcessing, setCoverageProcessing] = useState(false);
+  const [coverageReport, setCoverageReport] = useState<DoctorCoverageResult | null>(null);
+  const [coveragePreview, setCoveragePreview] = useState<SheetPreview | null>(null);
+  const [coveragePreviewLoading, setCoveragePreviewLoading] = useState(false);
+  const [monthlyPlannedCallLogFile, setMonthlyPlannedCallLogFile] = useState<File | null>(null);
+  const [monthlyPlannedTemplateFile, setMonthlyPlannedTemplateFile] = useState<File | null>(null);
+  const [monthlyPlannedProcessing, setMonthlyPlannedProcessing] = useState(false);
+  const [monthlyPlannedReport, setMonthlyPlannedReport] = useState<MonthlyPlannedResult | null>(
+    null,
+  );
+  const [monthlyPlannedPreview, setMonthlyPlannedPreview] = useState<SheetPreview | null>(null);
+  const [monthlyPlannedPreviewLoading, setMonthlyPlannedPreviewLoading] = useState(false);
 
   const excelInputRef = useRef<HTMLInputElement>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
+  const previewRef = useRef<HTMLDivElement>(null);
+  const callLogInputRef = useRef<HTMLInputElement>(null);
+  const dailyTemplateInputRef = useRef<HTMLInputElement>(null);
+  const dailyPreviewRef = useRef<HTMLDivElement>(null);
+  const coverageSourceInputRef = useRef<HTMLInputElement>(null);
+  const coverageTemplateInputRef = useRef<HTMLInputElement>(null);
+  const coveragePreviewRef = useRef<HTMLDivElement>(null);
+  const monthlyPlannedCallLogInputRef = useRef<HTMLInputElement>(null);
+  const monthlyPlannedTemplateInputRef = useRef<HTMLInputElement>(null);
+  const monthlyPlannedPreviewRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const key = "dashboard-line-index";
+    const current = Number(window.localStorage.getItem(key) ?? "-1");
+    const next = (Number.isFinite(current) ? current + 1 : 0) % DASHBOARD_LINES.length;
+    window.localStorage.setItem(key, String(next));
+    setDashboardLine(DASHBOARD_LINES[next]);
+  }, []);
+
+  useEffect(() => {
+    const saved = window.localStorage.getItem("site-theme-color") || DEFAULT_THEME_COLOR;
+    setThemeColor(saved);
+    applyThemeColor(saved);
+  }, []);
+
+  useEffect(() => {
+    const savedMode = window.localStorage.getItem("site-theme-mode") === "dark" ? "dark" : "light";
+    setThemeMode(savedMode);
+    applyThemeMode(savedMode);
+  }, []);
+
+  const updateThemeColor = (color: string) => {
+    setThemeColor(color);
+    applyThemeColor(color);
+    window.localStorage.setItem("site-theme-color", color);
+  };
+
+  const toggleThemeMode = () => {
+    const next = themeMode === "dark" ? "light" : "dark";
+    setThemeMode(next);
+    applyThemeMode(next);
+    window.localStorage.setItem("site-theme-mode", next);
+  };
 
   const onExcelChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -54,6 +209,8 @@ function HomePage() {
       setExcelFile(f);
       setReport(null);
       setDownloadUrl(null);
+      setSheetPreview(null);
+      setPreviewDirty(false);
     }
   };
 
@@ -68,16 +225,89 @@ function HomePage() {
     });
     setReport(null);
     setDownloadUrl(null);
+    setSheetPreview(null);
+    setPreviewDirty(false);
   };
 
-  const removePdf = (name: string) => setPdfFiles((prev) => prev.filter((p) => p.name !== name));
+  const removePdf = (name: string) => {
+    setPdfFiles((prev) => prev.filter((p) => p.name !== name));
+    setReport(null);
+    setDownloadUrl(null);
+    setSheetPreview(null);
+    setPreviewDirty(false);
+  };
+
+  const clearAllPdfs = () => {
+    setPdfFiles([]);
+    if (pdfInputRef.current) pdfInputRef.current.value = "";
+    setReport(null);
+    setDownloadUrl(null);
+    setSheetPreview(null);
+    setPreviewDirty(false);
+  };
 
   const sortedDates = useMemo(() => {
     const ds = pdfFiles
-      .map((f) => f.name.match(/(\d{4}-\d{2}-\d{2})/)?.[1])
+      .map((f) => extractDateFromPdfName(f.name))
       .filter((x): x is string => !!x);
     return [...new Set(ds)].sort();
   }, [pdfFiles]);
+  const canProcess = Boolean(excelFile) && pdfFiles.length > 0 && !processing;
+  const matchRate = report
+    ? Math.round(
+        (report.debug.totalMatched / Math.max(report.debug.totalEmployeesDetected, 1)) * 100,
+      )
+    : null;
+
+  const refreshHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    try {
+      setHistoryItems(await listReportHistory());
+    } catch (error) {
+      console.error("History load failed", error);
+      toast.error("Unable to load report history.");
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
+
+  const openHistory = useCallback(() => {
+    setActiveModule("history");
+    setHistoryPreview(null);
+    void refreshHistory();
+  }, [refreshHistory]);
+
+  const canProcessDaily = Boolean(callLogFile) && Boolean(dailyTemplateFile) && !dailyProcessing;
+  const canProcessCoverage =
+    Boolean(coverageSourceFile) && Boolean(coverageTemplateFile) && !coverageProcessing;
+  const canProcessMonthlyPlanned =
+    Boolean(monthlyPlannedCallLogFile) &&
+    Boolean(monthlyPlannedTemplateFile) &&
+    !monthlyPlannedProcessing;
+
+  const saveReportToHistory = useCallback(
+    async (nextReport: ProcessReport) => {
+      try {
+        await addReportHistory({
+          id: crypto.randomUUID(),
+          fileName: nextReport.fileName.replace(/\.xlsx$/i, "") + " - Updated.xlsx",
+          createdAt: new Date().toISOString(),
+          reportType: "Monthly Report",
+          dates: nextReport.dates,
+          pdfCount: pdfFiles.length,
+          totalEmployees: nextReport.totalEmployees,
+          matchedEmployees: nextReport.matchedEmployees,
+          size: nextReport.blob.size,
+          blob: nextReport.blob,
+        });
+        if (activeModule === "history") await refreshHistory();
+      } catch (error) {
+        console.error("History save failed", error);
+        toast.warning("Report ready, but history save failed.");
+      }
+    },
+    [activeModule, pdfFiles.length, refreshHistory],
+  );
 
   const onProcess = useCallback(async () => {
     if (!excelFile) {
@@ -93,6 +323,8 @@ function HomePage() {
     setProgress(0);
     setReport(null);
     setDownloadUrl(null);
+    setSheetPreview(null);
+    setPreviewDirty(false);
 
     try {
       // 1. Parse PDFs (with file-hash dedup against DB)
@@ -101,7 +333,7 @@ function HomePage() {
       const failed: { fileName: string; error: string }[] = [];
 
       // Pre-hash all files to check duplicates in one query
-      setProgressLabel("Checking for duplicate uploads…");
+      setProgressLabel("Checking for duplicate uploads...");
       const fileHashes: { file: File; hash: string }[] = [];
       for (const f of pdfFiles) {
         try {
@@ -137,7 +369,7 @@ function HomePage() {
         }
       }
       if (skipped.length) {
-        toast.info(`${skipped.length} file(s) were already processed before — re-running.`);
+        toast.info(`${skipped.length} file(s) were already processed before - re-running.`);
       }
       if (failed.length) {
         toast.warning(`Skipped ${failed.length} unreadable PDF(s)`);
@@ -145,7 +377,7 @@ function HomePage() {
       if (results.length === 0) throw new Error("No PDFs could be read.");
 
       // 2. Update Excel
-      setProgressLabel("Updating your Excel file…");
+      setProgressLabel("Updating your Excel file...");
       setProgress(80);
       const rep = await processExcel(excelFile, { pdfResults: results });
       if (rep.warnings.length) {
@@ -153,7 +385,7 @@ function HomePage() {
       }
 
       // 3. Sync to database (best-effort)
-      setProgressLabel("Saving history to database…");
+      setProgressLabel("Saving history to database...");
       setProgress(92);
       try {
         const employeeRows = await readEmployees(excelFile);
@@ -176,6 +408,7 @@ function HomePage() {
       const url = URL.createObjectURL(rep.blob);
       setDownloadUrl(url);
       setReport(rep);
+      await saveReportToHistory(rep);
 
       toast.success(
         `Report ready! ${rep.matchedEmployees}/${rep.totalEmployees} employees with selfies across ${rep.dates.length} day(s).`,
@@ -186,155 +419,1558 @@ function HomePage() {
     } finally {
       setProcessing(false);
     }
-  }, [excelFile, pdfFiles]);
+  }, [excelFile, pdfFiles, saveReportToHistory]);
 
-  const triggerDownload = () => {
-    if (!downloadUrl || !report) return;
+  const savePreviewEdits = async (): Promise<ProcessReport | null> => {
+    if (!report) return null;
+    if (!sheetPreview || !previewDirty) return report;
+
+    setPreviewSaving(true);
+    try {
+      const blob = await applySheetPreviewEdits(report.blob, sheetPreview);
+      const updatedReport = { ...report, blob };
+      const url = URL.createObjectURL(blob);
+      if (downloadUrl) URL.revokeObjectURL(downloadUrl);
+      setReport(updatedReport);
+      setDownloadUrl(url);
+      setPreviewDirty(false);
+      await saveReportToHistory(updatedReport);
+      toast.success("Manual edits applied to the Excel file.");
+      return updatedReport;
+    } catch (error) {
+      console.error("Excel edit save failed", error);
+      toast.error("Unable to apply manual edits.");
+      return null;
+    } finally {
+      setPreviewSaving(false);
+    }
+  };
+
+  const triggerDownload = async () => {
+    if (!report) return;
+    const latestReport = await savePreviewEdits();
+    if (!latestReport) return;
+    const url = URL.createObjectURL(latestReport.blob);
     const a = document.createElement("a");
-    a.href = downloadUrl;
-    a.download = report.fileName.replace(/\.xlsx$/i, "") + " - Updated.xlsx";
+    a.href = url;
+    a.download = latestReport.fileName.replace(/\.xlsx$/i, "") + " - Updated.xlsx";
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
+
+  const onDailyProcess = async () => {
+    if (!callLogFile) {
+      toast.error("Please upload the call log Excel file.");
+      return;
+    }
+    if (!dailyTemplateFile) {
+      toast.error("Please upload the daily report sample file.");
+      return;
+    }
+
+    setDailyProcessing(true);
+    setDailyReport(null);
+    setDailyPreview(null);
+    try {
+      const result = await processDailyReport(callLogFile, dailyTemplateFile);
+      setDailyReport(result);
+      await addReportHistory({
+        id: crypto.randomUUID(),
+        fileName: result.fileName,
+        createdAt: new Date().toISOString(),
+        reportType: "Daily Report",
+        dates: [],
+        pdfCount: 0,
+        totalEmployees: result.totalEmployees,
+        matchedEmployees: result.matchedEmployees,
+        size: result.blob.size,
+        blob: result.blob,
+      });
+      if (result.warnings.length) toast.warning(result.warnings[0]);
+      toast.success(`Daily report ready. ${result.matchedEmployees} employee(s) matched.`);
+    } catch (error) {
+      console.error("Daily report failed", error);
+      toast.error(error instanceof Error ? error.message : "Unable to generate daily report.");
+    } finally {
+      setDailyProcessing(false);
+    }
+  };
+
+  const openDailyPreview = async () => {
+    if (!dailyReport) return;
+    setDailyPreviewLoading(true);
+    try {
+      const preview = await buildSheetPreview(dailyReport.blob, dailyReport.sheetName);
+      setDailyPreview(preview);
+      requestAnimationFrame(() => {
+        dailyPreviewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    } catch (error) {
+      console.error("Daily preview failed", error);
+      toast.error("Unable to open the daily report preview.");
+    } finally {
+      setDailyPreviewLoading(false);
+    }
+  };
+
+  const downloadDailyReport = () => {
+    if (!dailyReport) return;
+    const url = URL.createObjectURL(dailyReport.blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = dailyReport.fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const onCoverageProcess = async () => {
+    if (!coverageSourceFile) {
+      toast.error("Please upload the Doctor Coverage Excel file.");
+      return;
+    }
+    if (!coverageTemplateFile) {
+      toast.error("Please upload the sample employee Excel file.");
+      return;
+    }
+
+    setCoverageProcessing(true);
+    setCoverageReport(null);
+    setCoveragePreview(null);
+    try {
+      const result = await processDoctorCoverageReport(coverageSourceFile, coverageTemplateFile);
+      setCoverageReport(result);
+      await addReportHistory({
+        id: crypto.randomUUID(),
+        fileName: result.fileName,
+        createdAt: new Date().toISOString(),
+        reportType: "Doctor Coverage Report",
+        dates: [],
+        pdfCount: 0,
+        totalEmployees: result.totalEmployees,
+        matchedEmployees: result.matchedEmployees,
+        size: result.blob.size,
+        blob: result.blob,
+      });
+      if (result.warnings.length) toast.warning(result.warnings[0]);
+      toast.success(`Doctor coverage report ready. ${result.matchedEmployees} employee(s) matched.`);
+    } catch (error) {
+      console.error("Doctor coverage report failed", error);
+      toast.error(
+        error instanceof Error ? error.message : "Unable to generate doctor coverage report.",
+      );
+    } finally {
+      setCoverageProcessing(false);
+    }
+  };
+
+  const openCoveragePreview = async () => {
+    if (!coverageReport) return;
+    setCoveragePreviewLoading(true);
+    try {
+      const preview = await buildSheetPreview(coverageReport.blob, coverageReport.sheetName);
+      setCoveragePreview(preview);
+      requestAnimationFrame(() => {
+        coveragePreviewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    } catch (error) {
+      console.error("Doctor coverage preview failed", error);
+      toast.error("Unable to open the doctor coverage preview.");
+    } finally {
+      setCoveragePreviewLoading(false);
+    }
+  };
+
+  const downloadCoverageReport = () => {
+    if (!coverageReport) return;
+    const url = URL.createObjectURL(coverageReport.blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = coverageReport.fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const onMonthlyPlannedProcess = async () => {
+    if (!monthlyPlannedCallLogFile) {
+      toast.error("Please upload the monthly call log Excel file.");
+      return;
+    }
+    if (!monthlyPlannedTemplateFile) {
+      toast.error("Please upload the sample employee Excel file.");
+      return;
+    }
+
+    setMonthlyPlannedProcessing(true);
+    setMonthlyPlannedReport(null);
+    setMonthlyPlannedPreview(null);
+    try {
+      const result = await processMonthlyPlannedReport(
+        monthlyPlannedCallLogFile,
+        monthlyPlannedTemplateFile,
+      );
+      setMonthlyPlannedReport(result);
+      await addReportHistory({
+        id: crypto.randomUUID(),
+        fileName: result.fileName,
+        createdAt: new Date().toISOString(),
+        reportType: "Monthly Planned Unplanned",
+        dates: [],
+        pdfCount: 0,
+        totalEmployees: result.totalEmployees,
+        matchedEmployees: result.matchedEmployees,
+        size: result.blob.size,
+        blob: result.blob,
+      });
+      if (result.warnings.length) toast.warning(result.warnings[0]);
+      toast.success(
+        `Monthly planned/unplanned report ready. ${result.matchedEmployees} employee(s) matched.`,
+      );
+    } catch (error) {
+      console.error("Monthly planned/unplanned report failed", error);
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Unable to generate monthly planned/unplanned report.",
+      );
+    } finally {
+      setMonthlyPlannedProcessing(false);
+    }
+  };
+
+  const openMonthlyPlannedPreview = async () => {
+    if (!monthlyPlannedReport) return;
+    setMonthlyPlannedPreviewLoading(true);
+    try {
+      const preview = await buildSheetPreview(
+        monthlyPlannedReport.blob,
+        monthlyPlannedReport.sheetName,
+      );
+      setMonthlyPlannedPreview(preview);
+      requestAnimationFrame(() => {
+        monthlyPlannedPreviewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    } catch (error) {
+      console.error("Monthly planned/unplanned preview failed", error);
+      toast.error("Unable to open the monthly planned/unplanned preview.");
+    } finally {
+      setMonthlyPlannedPreviewLoading(false);
+    }
+  };
+
+  const downloadMonthlyPlannedReport = () => {
+    if (!monthlyPlannedReport) return;
+    const url = URL.createObjectURL(monthlyPlannedReport.blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = monthlyPlannedReport.fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadHistoryItem = async (id: string) => {
+    try {
+      const item = await getReportHistory(id);
+      if (!item) {
+        toast.error("History file not found.");
+        await refreshHistory();
+        return;
+      }
+      const url = URL.createObjectURL(item.blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = item.fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("History download failed", error);
+      toast.error("Unable to download history file.");
+    }
+  };
+
+  const previewHistoryItem = async (id: string) => {
+    setHistoryPreviewLoading(true);
+    setHistoryPreview(null);
+    try {
+      const item = await getReportHistory(id);
+      if (!item) {
+        toast.error("History file not found.");
+        await refreshHistory();
+        return;
+      }
+      const preview = await buildSheetPreview(item.blob);
+      setHistoryPreview({ ...preview, name: item.fileName });
+    } catch (error) {
+      console.error("History preview failed", error);
+      toast.error("Unable to preview history file.");
+    } finally {
+      setHistoryPreviewLoading(false);
+    }
+  };
+
+  const removeHistoryItem = async (id: string) => {
+    try {
+      await deleteReportHistory(id);
+      await refreshHistory();
+      setHistoryPreview(null);
+      toast.success("History file removed.");
+    } catch (error) {
+      console.error("History delete failed", error);
+      toast.error("Unable to remove history file.");
+    }
+  };
+
+  const openFilePreview = async () => {
+    if (!report) return;
+    setPreviewLoading(true);
+    try {
+      const preview = await buildSheetPreview(report.blob, report.sheetName);
+      setSheetPreview(preview);
+      setPreviewDirty(false);
+      requestAnimationFrame(() => {
+        previewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    } catch (error) {
+      console.error("Excel preview failed", error);
+      toast.error("Unable to open the Excel preview.");
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const updatePreviewCell = (rowNumber: number, colNumber: number, value: string) => {
+    setSheetPreview((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        rows: current.rows.map((row) =>
+          row.map((cell) =>
+            cell.rowNumber === rowNumber && cell.colNumber === colNumber
+              ? { ...cell, value }
+              : cell,
+          ),
+        ),
+      };
+    });
+    setPreviewDirty(true);
+  };
+
+  if (!activeModule) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Toaster richColors position="top-center" />
+        <ThemeCustomizer
+          color={themeColor}
+          mode={themeMode}
+          onChange={updateThemeColor}
+          onToggleMode={toggleThemeMode}
+        />
+
+        <header className="border-b border-primary/25 bg-[var(--header-surface)]">
+          <div className="flex w-full flex-col gap-2 px-5 py-4 sm:px-6 lg:pr-72">
+            <div className="flex items-center gap-3">
+              <BrandMark icon={<TableProperties className="h-5 w-5" />} />
+              <div>
+                <h1 className="text-xl font-bold text-[var(--header-foreground)]">
+                  neutropharmacallsummry.com
+                </h1>
+                <p className="text-sm font-medium text-[var(--header-muted)]">{dashboardLine}</p>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <main className="mx-auto min-h-[calc(100vh-92px)] max-w-[1720px] px-5 py-7 sm:px-8 lg:px-10">
+          <div className="mb-5">
+            <div className="text-xs font-bold uppercase tracking-wide text-primary">
+              Workspace
+            </div>
+            <h2 className="mt-1 text-lg font-semibold text-foreground">Dashboard</h2>
+          </div>
+
+          <div className="grid gap-5 md:grid-cols-2">
+            <FunctionCard
+              title="Daily Report"
+              description="Use two Excel files only: a call log and your daily report sample template."
+              icon={<TableProperties className="h-6 w-6" />}
+              onClick={() => setActiveModule("daily-report")}
+            />
+            <FunctionCard
+              title="Monthly Report"
+              description="Update the monthly Excel sheet with date-wise data from daily PDF reports."
+              icon={<FileSpreadsheet className="h-6 w-6" />}
+              onClick={() => setActiveModule("monthly-report")}
+            />
+            <FunctionCard
+              title="Doctor Coverage"
+              description="Add target doctors, covered doctors, and coverage percentage to a sample file."
+              icon={<BarChart3 className="h-6 w-6" />}
+              onClick={() => setActiveModule("doctor-coverage")}
+            />
+            <FunctionCard
+              title="Monthly Planned Unplanned"
+              description="Create monthly planned, unplanned, total call averages, and CP average time."
+              icon={<CalendarDays className="h-6 w-6" />}
+              onClick={() => setActiveModule("monthly-planned")}
+            />
+            <FunctionCard
+              title="History"
+              description="View, preview, and download previously generated report files."
+              icon={<HistoryIcon className="h-6 w-6" />}
+              onClick={openHistory}
+              className="md:col-span-2"
+            />
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  if (activeModule === "daily-report") {
+    return (
+      <div className="min-h-screen bg-background">
+        <Toaster richColors position="top-center" />
+
+        <header className="border-b border-primary/25 bg-[var(--header-surface)]">
+          <div className="mx-auto flex max-w-[1720px] flex-col gap-5 px-5 py-5 sm:px-8 lg:flex-row lg:items-center lg:justify-between lg:px-10">
+            <div className="flex items-center gap-3">
+              <BrandMark icon={<TableProperties className="h-5 w-5" />} />
+              <div>
+                <h1 className="text-2xl font-bold text-[var(--header-foreground)]">Daily Report</h1>
+                <ModulePill label="Current Module: Daily Report" />
+                <p className="text-sm text-[var(--header-muted)]">
+                  Two Excel files only. No PDF upload is required.
+                </p>
+              </div>
+            </div>
+            <Button
+              size="sm"
+              onClick={() => setActiveModule(null)}
+              className="self-start border border-white/70 bg-white text-primary shadow-sm hover:bg-white/90 lg:ml-auto"
+            >
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Back
+            </Button>
+          </div>
+        </header>
+
+        <main className="mx-auto grid max-w-[1720px] gap-6 px-5 py-8 sm:px-8 lg:grid-cols-[minmax(0,1fr)_360px] lg:px-10">
+          <div className="space-y-6">
+            <div className="grid gap-4 md:grid-cols-2">
+              <UploadCard
+                step={1}
+                title="Daily Report Sample"
+                subtitle={
+                  dailyTemplateFile ? "Sample file selected" : "Upload the report template workbook"
+                }
+                icon={<FileText className="h-5 w-5" />}
+                accept=".xlsx,.xls"
+                ready={Boolean(dailyTemplateFile)}
+                onClick={() => dailyTemplateInputRef.current?.click()}
+              >
+                <input
+                  ref={dailyTemplateInputRef}
+                  type="file"
+                  accept=".xlsx,.xls"
+                  className="hidden"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (!file) return;
+                    setDailyTemplateFile(file);
+                    setDailyReport(null);
+                    setDailyPreview(null);
+                  }}
+                />
+                {dailyTemplateFile ? (
+                  <FilePill
+                    name={dailyTemplateFile.name}
+                    onRemove={() => {
+                      setDailyTemplateFile(null);
+                      setDailyReport(null);
+                      setDailyPreview(null);
+                    }}
+                    color="primary"
+                  />
+                ) : (
+                  <EmptyHint icon={<FileText className="h-5 w-5" />} label="Choose sample file" />
+                )}
+              </UploadCard>
+
+              <UploadCard
+                step={2}
+                title="Call Log Excel"
+                subtitle={callLogFile ? "Call log selected" : "Upload the team call log workbook"}
+                icon={<FileSpreadsheet className="h-5 w-5" />}
+                accept=".xlsx,.xls"
+                ready={Boolean(callLogFile)}
+                onClick={() => callLogInputRef.current?.click()}
+              >
+                <input
+                  ref={callLogInputRef}
+                  type="file"
+                  accept=".xlsx,.xls"
+                  className="hidden"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (!file) return;
+                    setCallLogFile(file);
+                    setDailyReport(null);
+                    setDailyPreview(null);
+                  }}
+                />
+                {callLogFile ? (
+                  <FilePill
+                    name={callLogFile.name}
+                    onRemove={() => {
+                      setCallLogFile(null);
+                      setDailyReport(null);
+                      setDailyPreview(null);
+                    }}
+                    color="accent"
+                  />
+                ) : (
+                  <EmptyHint icon={<FileSpreadsheet className="h-5 w-5" />} label="Choose call log" />
+                )}
+              </UploadCard>
+            </div>
+
+            <Card className="border-border bg-card p-6 shadow-[var(--shadow-soft)]">
+              <div className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
+                <div>
+                  <div className="text-xs font-bold uppercase text-primary">Step 3</div>
+                  <h2 className="mt-1 text-lg font-semibold text-foreground">
+                    Generate daily report
+                  </h2>
+                  <p className="text-sm text-muted-foreground">
+                    Data is matched by Employee Code only, then Planned, Unplanned, Mor, Eve, Total,
+                    and Cp are filled in the sample file.
+                  </p>
+                </div>
+                <Button
+                  size="lg"
+                  onClick={onDailyProcess}
+                  disabled={!canProcessDaily}
+                  className="min-w-44 shadow-[var(--shadow-elegant)]"
+                >
+                  {dailyProcessing ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Processing...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="mr-2 h-4 w-4" />
+                      Generate Report
+                    </>
+                  )}
+                </Button>
+              </div>
+            </Card>
+
+            {dailyReport && (
+              <Card className="border-border bg-card p-6 shadow-[var(--shadow-soft)]">
+                <div className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-success/15 text-success">
+                      <CheckCircle2 className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-semibold text-foreground">Daily report ready</h3>
+                      <p className="text-sm text-muted-foreground">
+                        {dailyReport.matchedEmployees}/{dailyReport.totalEmployees} employee(s)
+                        matched from the sample file.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      onClick={openDailyPreview}
+                      variant="outline"
+                      disabled={dailyPreviewLoading}
+                    >
+                      {dailyPreviewLoading ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <Eye className="mr-2 h-4 w-4" />
+                      )}
+                      Preview
+                    </Button>
+                    <Button onClick={downloadDailyReport}>
+                      <Download className="mr-2 h-4 w-4" />
+                      Download
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="mt-6 grid gap-4 md:grid-cols-3">
+                  <Stat label="Call log rows" value={dailyReport.debug.callRows} />
+                  <Stat label="Face-to-face calls" value={dailyReport.debug.faceToFaceRows} />
+                  <Stat label="Contact points" value={dailyReport.debug.contactPointRows} />
+                </div>
+
+                {dailyReport.preview.length > 0 && (
+                  <div className="mt-6">
+                    <div className="mb-2 text-sm font-semibold text-foreground">Top callers</div>
+                    <div className="space-y-1.5">
+                      {dailyReport.preview.map((item, index) => (
+                        <div
+                          key={`${item.name}-${index}`}
+                          className="flex items-center justify-between rounded-md border border-border bg-muted/40 px-3 py-2 text-sm"
+                        >
+                          <span>{item.name}</span>
+                          <span className="font-semibold text-foreground">{item.total}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </Card>
+            )}
+
+            {(dailyPreviewLoading || dailyPreview) && (
+              <Card
+                ref={dailyPreviewRef}
+                className="border-border bg-card p-5 shadow-[var(--shadow-soft)]"
+              >
+                <div className="mb-3 text-sm font-semibold text-foreground">
+                  {dailyPreview?.name ?? "Opening daily report preview"}
+                </div>
+                <div className="max-h-[70vh] overflow-auto rounded-md border border-border bg-background">
+                  {dailyPreviewLoading && !dailyPreview ? (
+                    <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Opening daily report preview...
+                    </div>
+                  ) : (
+                    <PreviewTable preview={dailyPreview} readOnly />
+                  )}
+                </div>
+              </Card>
+            )}
+          </div>
+
+          <aside className="space-y-4">
+            <Card className="border-border bg-card p-5 shadow-[var(--shadow-soft)]">
+              <div className="mb-4 flex items-center justify-between">
+                <div>
+                  <div className="text-xs font-bold uppercase text-primary">Run status</div>
+                  <h2 className="mt-1 text-base font-semibold text-foreground">Daily workspace</h2>
+                </div>
+                <ShieldCheck className="h-5 w-5 text-primary" />
+              </div>
+              <div className="space-y-3">
+                <ChecklistItem done={Boolean(callLogFile)} label="Call log attached" />
+                <ChecklistItem done={Boolean(dailyTemplateFile)} label="Sample file attached" />
+                <ChecklistItem done={Boolean(dailyReport)} label="Report generated" />
+                <ChecklistItem done={Boolean(dailyPreview)} label="Preview opened" />
+              </div>
+            </Card>
+            <Card className="border-border bg-card p-5 shadow-[var(--shadow-soft)]">
+              <div className="text-xs font-bold uppercase text-primary">Match rule</div>
+              <p className="mt-2 text-sm text-muted-foreground">
+                The sample file must include: SR #, Region, Employee Code, Name, City, Designation,
+                Planned, Unplanned, Mor, Eve, Total, Cp, and Remarks. Existing rows and Remarks are
+                preserved.
+              </p>
+            </Card>
+          </aside>
+        </main>
+      </div>
+    );
+  }
+
+  if (activeModule === "doctor-coverage") {
+    return (
+      <div className="min-h-screen bg-background">
+        <Toaster richColors position="top-center" />
+
+        <header className="border-b border-primary/25 bg-[var(--header-surface)]">
+          <div className="mx-auto flex max-w-[1720px] flex-col gap-5 px-5 py-5 sm:px-8 lg:flex-row lg:items-center lg:justify-between lg:px-10">
+            <div className="flex items-center gap-3">
+              <BrandMark icon={<BarChart3 className="h-5 w-5" />} />
+              <div>
+                <h1 className="text-2xl font-bold text-[var(--header-foreground)]">
+                  Doctor Coverage
+                </h1>
+                <ModulePill label="Current Module: Doctor Coverage" />
+                <p className="text-sm text-[var(--header-muted)]">
+                  Add coverage columns to a sample employee file.
+                </p>
+              </div>
+            </div>
+            <Button
+              size="sm"
+              onClick={() => setActiveModule(null)}
+              className="self-start border border-white/70 bg-white text-primary shadow-sm hover:bg-white/90 lg:ml-auto"
+            >
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Back
+            </Button>
+          </div>
+        </header>
+
+        <main className="mx-auto grid max-w-[1720px] gap-6 px-5 py-8 sm:px-8 lg:grid-cols-[minmax(0,1fr)_360px] lg:px-10">
+          <div className="space-y-6">
+            <div className="grid gap-4 md:grid-cols-2">
+              <UploadCard
+                step={1}
+                title="Sample Employee Excel"
+                subtitle={
+                  coverageTemplateFile ? "Sample file selected" : "Upload the sample employee file"
+                }
+                icon={<FileText className="h-5 w-5" />}
+                accept=".xlsx,.xls"
+                ready={Boolean(coverageTemplateFile)}
+                onClick={() => coverageTemplateInputRef.current?.click()}
+              >
+                <input
+                  ref={coverageTemplateInputRef}
+                  type="file"
+                  accept=".xlsx,.xls"
+                  className="hidden"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (!file) return;
+                    setCoverageTemplateFile(file);
+                    setCoverageReport(null);
+                    setCoveragePreview(null);
+                  }}
+                />
+                {coverageTemplateFile ? (
+                  <FilePill
+                    name={coverageTemplateFile.name}
+                    onRemove={() => {
+                      setCoverageTemplateFile(null);
+                      setCoverageReport(null);
+                      setCoveragePreview(null);
+                    }}
+                    color="primary"
+                  />
+                ) : (
+                  <EmptyHint icon={<FileText className="h-5 w-5" />} label="Choose sample file" />
+                )}
+              </UploadCard>
+
+              <UploadCard
+                step={2}
+                title="Doctor Coverage Excel"
+                subtitle={
+                  coverageSourceFile ? "Coverage source selected" : "Upload the coverage workbook"
+                }
+                icon={<FileSpreadsheet className="h-5 w-5" />}
+                accept=".xlsx,.xls"
+                ready={Boolean(coverageSourceFile)}
+                onClick={() => coverageSourceInputRef.current?.click()}
+              >
+                <input
+                  ref={coverageSourceInputRef}
+                  type="file"
+                  accept=".xlsx,.xls"
+                  className="hidden"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (!file) return;
+                    setCoverageSourceFile(file);
+                    setCoverageReport(null);
+                    setCoveragePreview(null);
+                  }}
+                />
+                {coverageSourceFile ? (
+                  <FilePill
+                    name={coverageSourceFile.name}
+                    onRemove={() => {
+                      setCoverageSourceFile(null);
+                      setCoverageReport(null);
+                      setCoveragePreview(null);
+                    }}
+                    color="accent"
+                  />
+                ) : (
+                  <EmptyHint
+                    icon={<FileSpreadsheet className="h-5 w-5" />}
+                    label="Choose coverage file"
+                  />
+                )}
+              </UploadCard>
+            </div>
+
+            <Card className="border-border bg-card p-6 shadow-[var(--shadow-soft)]">
+              <div className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
+                <div>
+                  <div className="text-xs font-bold uppercase text-primary">Step 3</div>
+                  <h2 className="mt-1 text-lg font-semibold text-foreground">
+                    Generate doctor coverage report
+                  </h2>
+                  <p className="text-sm text-muted-foreground">
+                    Data is matched by Employee Code first, then Name, and coverage columns are
+                    filled in the sample file.
+                  </p>
+                </div>
+                <Button
+                  size="lg"
+                  onClick={onCoverageProcess}
+                  disabled={!canProcessCoverage}
+                  className="min-w-44 shadow-[var(--shadow-elegant)]"
+                >
+                  {coverageProcessing ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Processing...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="mr-2 h-4 w-4" />
+                      Generate Report
+                    </>
+                  )}
+                </Button>
+              </div>
+            </Card>
+
+            {coverageReport && (
+              <Card className="border-border bg-card p-6 shadow-[var(--shadow-soft)]">
+                <div className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-success/15 text-success">
+                      <CheckCircle2 className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-semibold text-foreground">
+                        Doctor coverage report ready
+                      </h3>
+                      <p className="text-sm text-muted-foreground">
+                        {coverageReport.matchedEmployees}/{coverageReport.totalEmployees} employee(s)
+                        matched from the sample file.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      onClick={openCoveragePreview}
+                      variant="outline"
+                      disabled={coveragePreviewLoading}
+                    >
+                      {coveragePreviewLoading ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <Eye className="mr-2 h-4 w-4" />
+                      )}
+                      Preview
+                    </Button>
+                    <Button onClick={downloadCoverageReport}>
+                      <Download className="mr-2 h-4 w-4" />
+                      Download
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="mt-6 grid gap-4 md:grid-cols-3">
+                  <Stat label="Coverage rows" value={coverageReport.debug.sourceRows} />
+                  <Stat label="Sample rows" value={coverageReport.debug.templateRows} />
+                  <Stat label="Matched" value={coverageReport.matchedEmployees} />
+                </div>
+
+                {coverageReport.preview.length > 0 && (
+                  <div className="mt-6">
+                    <div className="mb-2 text-sm font-semibold text-foreground">
+                      Highest covered doctors
+                    </div>
+                    <div className="space-y-1.5">
+                      {coverageReport.preview.map((item, index) => (
+                        <div
+                          key={`${item.name}-${index}`}
+                          className="flex items-center justify-between rounded-md border border-border bg-muted/40 px-3 py-2 text-sm"
+                        >
+                          <span>{item.name}</span>
+                          <span className="font-semibold text-foreground">{item.total}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </Card>
+            )}
+
+            {(coveragePreviewLoading || coveragePreview) && (
+              <Card
+                ref={coveragePreviewRef}
+                className="border-border bg-card p-5 shadow-[var(--shadow-soft)]"
+              >
+                <div className="mb-3 text-sm font-semibold text-foreground">
+                  {coveragePreview?.name ?? "Opening doctor coverage preview"}
+                </div>
+                <div className="max-h-[70vh] overflow-auto rounded-md border border-border bg-background">
+                  {coveragePreviewLoading && !coveragePreview ? (
+                    <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Opening doctor coverage preview...
+                    </div>
+                  ) : (
+                    <PreviewTable preview={coveragePreview} readOnly />
+                  )}
+                </div>
+              </Card>
+            )}
+          </div>
+
+          <aside className="space-y-4">
+            <Card className="border-border bg-card p-5 shadow-[var(--shadow-soft)]">
+              <div className="mb-4 flex items-center justify-between">
+                <div>
+                  <div className="text-xs font-bold uppercase text-primary">Run status</div>
+                  <h2 className="mt-1 text-base font-semibold text-foreground">
+                    Coverage workspace
+                  </h2>
+                </div>
+                <ShieldCheck className="h-5 w-5 text-primary" />
+              </div>
+              <div className="space-y-3">
+                <ChecklistItem done={Boolean(coverageSourceFile)} label="Coverage file attached" />
+                <ChecklistItem done={Boolean(coverageTemplateFile)} label="Sample file attached" />
+                <ChecklistItem done={Boolean(coverageReport)} label="Report generated" />
+                <ChecklistItem done={Boolean(coveragePreview)} label="Preview opened" />
+              </div>
+            </Card>
+            <Card className="border-border bg-card p-5 shadow-[var(--shadow-soft)]">
+              <div className="text-xs font-bold uppercase text-primary">Columns added</div>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Target Doctors, Covered Doctors, and Coverage % are added to the sample file without
+                changing existing employee rows.
+              </p>
+            </Card>
+          </aside>
+        </main>
+      </div>
+    );
+  }
+
+  if (activeModule === "monthly-planned") {
+    return (
+      <div className="min-h-screen bg-background">
+        <Toaster richColors position="top-center" />
+
+        <header className="border-b border-primary/25 bg-[var(--header-surface)]">
+          <div className="mx-auto flex max-w-[1720px] flex-col gap-5 px-5 py-5 sm:px-8 lg:flex-row lg:items-center lg:justify-between lg:px-10">
+            <div className="flex items-center gap-3">
+              <BrandMark icon={<CalendarDays className="h-5 w-5" />} />
+              <div>
+                <h1 className="text-2xl font-bold text-[var(--header-foreground)]">
+                  Monthly Planned Unplanned
+                </h1>
+                <ModulePill label="Current Module: Monthly Planned Unplanned" />
+                <p className="text-sm text-[var(--header-muted)]">
+                  Monthly call log summary by employee.
+                </p>
+              </div>
+            </div>
+            <Button
+              size="sm"
+              onClick={() => setActiveModule(null)}
+              className="self-start border border-white/70 bg-white text-primary shadow-sm hover:bg-white/90 lg:ml-auto"
+            >
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Back
+            </Button>
+          </div>
+        </header>
+
+        <main className="mx-auto grid max-w-[1720px] gap-6 px-5 py-8 sm:px-8 lg:grid-cols-[minmax(0,1fr)_360px] lg:px-10">
+          <div className="space-y-6">
+            <div className="grid gap-4 md:grid-cols-2">
+              <UploadCard
+                step={1}
+                title="Sample Employee Excel"
+                subtitle={
+                  monthlyPlannedTemplateFile ? "Sample file selected" : "Upload the sample file"
+                }
+                icon={<FileText className="h-5 w-5" />}
+                accept=".xlsx,.xls"
+                ready={Boolean(monthlyPlannedTemplateFile)}
+                onClick={() => monthlyPlannedTemplateInputRef.current?.click()}
+              >
+                <input
+                  ref={monthlyPlannedTemplateInputRef}
+                  type="file"
+                  accept=".xlsx,.xls"
+                  className="hidden"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (!file) return;
+                    setMonthlyPlannedTemplateFile(file);
+                    setMonthlyPlannedReport(null);
+                    setMonthlyPlannedPreview(null);
+                  }}
+                />
+                {monthlyPlannedTemplateFile ? (
+                  <FilePill
+                    name={monthlyPlannedTemplateFile.name}
+                    onRemove={() => {
+                      setMonthlyPlannedTemplateFile(null);
+                      setMonthlyPlannedReport(null);
+                      setMonthlyPlannedPreview(null);
+                    }}
+                    color="primary"
+                  />
+                ) : (
+                  <EmptyHint icon={<FileText className="h-5 w-5" />} label="Choose sample file" />
+                )}
+              </UploadCard>
+
+              <UploadCard
+                step={2}
+                title="Monthly Call Log Excel"
+                subtitle={
+                  monthlyPlannedCallLogFile ? "Call log selected" : "Upload the monthly call log"
+                }
+                icon={<FileSpreadsheet className="h-5 w-5" />}
+                accept=".xlsx,.xls"
+                ready={Boolean(monthlyPlannedCallLogFile)}
+                onClick={() => monthlyPlannedCallLogInputRef.current?.click()}
+              >
+                <input
+                  ref={monthlyPlannedCallLogInputRef}
+                  type="file"
+                  accept=".xlsx,.xls"
+                  className="hidden"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (!file) return;
+                    setMonthlyPlannedCallLogFile(file);
+                    setMonthlyPlannedReport(null);
+                    setMonthlyPlannedPreview(null);
+                  }}
+                />
+                {monthlyPlannedCallLogFile ? (
+                  <FilePill
+                    name={monthlyPlannedCallLogFile.name}
+                    onRemove={() => {
+                      setMonthlyPlannedCallLogFile(null);
+                      setMonthlyPlannedReport(null);
+                      setMonthlyPlannedPreview(null);
+                    }}
+                    color="accent"
+                  />
+                ) : (
+                  <EmptyHint
+                    icon={<FileSpreadsheet className="h-5 w-5" />}
+                    label="Choose call log"
+                  />
+                )}
+              </UploadCard>
+            </div>
+
+            <Card className="border-border bg-card p-6 shadow-[var(--shadow-soft)]">
+              <div className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
+                <div>
+                  <div className="text-xs font-bold uppercase text-primary">Step 3</div>
+                  <h2 className="mt-1 text-lg font-semibold text-foreground">
+                    Generate monthly planned/unplanned report
+                  </h2>
+                  <p className="text-sm text-muted-foreground">
+                    Employee Code matching is used first. Planned/unplanned totals, call averages,
+                    and CP average time are added to the sample file.
+                  </p>
+                </div>
+                <Button
+                  size="lg"
+                  onClick={onMonthlyPlannedProcess}
+                  disabled={!canProcessMonthlyPlanned}
+                  className="min-w-44 shadow-[var(--shadow-elegant)]"
+                >
+                  {monthlyPlannedProcessing ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Processing...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="mr-2 h-4 w-4" />
+                      Generate Report
+                    </>
+                  )}
+                </Button>
+              </div>
+            </Card>
+
+            {monthlyPlannedReport && (
+              <Card className="border-border bg-card p-6 shadow-[var(--shadow-soft)]">
+                <div className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-success/15 text-success">
+                      <CheckCircle2 className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-semibold text-foreground">
+                        Monthly planned/unplanned report ready
+                      </h3>
+                      <p className="text-sm text-muted-foreground">
+                        {monthlyPlannedReport.matchedEmployees}/
+                        {monthlyPlannedReport.totalEmployees} employee(s) matched from the sample
+                        file.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      onClick={openMonthlyPlannedPreview}
+                      variant="outline"
+                      disabled={monthlyPlannedPreviewLoading}
+                    >
+                      {monthlyPlannedPreviewLoading ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <Eye className="mr-2 h-4 w-4" />
+                      )}
+                      Preview
+                    </Button>
+                    <Button onClick={downloadMonthlyPlannedReport}>
+                      <Download className="mr-2 h-4 w-4" />
+                      Download
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="mt-6 grid gap-4 md:grid-cols-3">
+                  <Stat label="Call rows" value={monthlyPlannedReport.debug.sourceRows} />
+                  <Stat label="Sample rows" value={monthlyPlannedReport.debug.templateRows} />
+                  <Stat label="Matched" value={monthlyPlannedReport.matchedEmployees} />
+                </div>
+
+                {monthlyPlannedReport.preview.length > 0 && (
+                  <div className="mt-6">
+                    <div className="mb-2 text-sm font-semibold text-foreground">
+                      Highest total calls
+                    </div>
+                    <div className="space-y-1.5">
+                      {monthlyPlannedReport.preview.map((item, index) => (
+                        <div
+                          key={`${item.name}-${index}`}
+                          className="flex items-center justify-between rounded-md border border-border bg-muted/40 px-3 py-2 text-sm"
+                        >
+                          <span>{item.name}</span>
+                          <span className="font-semibold text-foreground">{item.total}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </Card>
+            )}
+
+            {(monthlyPlannedPreviewLoading || monthlyPlannedPreview) && (
+              <Card
+                ref={monthlyPlannedPreviewRef}
+                className="border-border bg-card p-5 shadow-[var(--shadow-soft)]"
+              >
+                <div className="mb-3 text-sm font-semibold text-foreground">
+                  {monthlyPlannedPreview?.name ?? "Opening monthly planned/unplanned preview"}
+                </div>
+                <div className="max-h-[70vh] overflow-auto rounded-md border border-border bg-background">
+                  {monthlyPlannedPreviewLoading && !monthlyPlannedPreview ? (
+                    <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Opening monthly planned/unplanned preview...
+                    </div>
+                  ) : (
+                    <PreviewTable preview={monthlyPlannedPreview} readOnly />
+                  )}
+                </div>
+              </Card>
+            )}
+          </div>
+
+          <aside className="space-y-4">
+            <Card className="border-border bg-card p-5 shadow-[var(--shadow-soft)]">
+              <div className="mb-4 flex items-center justify-between">
+                <div>
+                  <div className="text-xs font-bold uppercase text-primary">Run status</div>
+                  <h2 className="mt-1 text-base font-semibold text-foreground">
+                    Monthly summary workspace
+                  </h2>
+                </div>
+                <ShieldCheck className="h-5 w-5 text-primary" />
+              </div>
+              <div className="space-y-3">
+                <ChecklistItem
+                  done={Boolean(monthlyPlannedCallLogFile)}
+                  label="Call log attached"
+                />
+                <ChecklistItem
+                  done={Boolean(monthlyPlannedTemplateFile)}
+                  label="Sample file attached"
+                />
+                <ChecklistItem done={Boolean(monthlyPlannedReport)} label="Report generated" />
+                <ChecklistItem done={Boolean(monthlyPlannedPreview)} label="Preview opened" />
+              </div>
+            </Card>
+            <Card className="border-border bg-card p-5 shadow-[var(--shadow-soft)]">
+              <div className="text-xs font-bold uppercase text-primary">Columns added</div>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Total Planned, Planned Avg, Total Unplanned, Unplanned Avg, Total Calls, Total
+                Calls Avg, and CP Avg Time.
+              </p>
+            </Card>
+          </aside>
+        </main>
+      </div>
+    );
+  }
+
+  if (activeModule === "history") {
+    return (
+      <div className="min-h-screen bg-background">
+        <Toaster richColors position="top-center" />
+
+        <header className="border-b border-primary/25 bg-[var(--header-surface)]">
+          <div className="mx-auto flex max-w-[1720px] flex-col gap-5 px-5 py-5 sm:px-8 lg:flex-row lg:items-center lg:justify-between lg:px-10">
+            <div className="flex items-center gap-3">
+              <BrandMark icon={<HistoryIcon className="h-5 w-5" />} />
+              <div>
+                <h1 className="text-2xl font-bold text-[var(--header-foreground)]">History</h1>
+                <ModulePill label="Current Module: History" />
+                <p className="text-sm text-[var(--header-muted)]">Saved monthly report files</p>
+              </div>
+            </div>
+            <Button
+              size="sm"
+              onClick={() => setActiveModule(null)}
+              className="self-start border border-white/70 bg-white text-primary shadow-sm hover:bg-white/90 lg:ml-auto"
+            >
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Back
+            </Button>
+          </div>
+        </header>
+
+        <main className="mx-auto max-w-[1720px] px-5 py-8 sm:px-8 lg:px-10">
+          <Card className="border-border bg-card p-5 shadow-[var(--shadow-soft)]">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-bold uppercase text-primary">Saved reports</div>
+                <h2 className="mt-1 text-lg font-semibold text-foreground">
+                  {historyItems.length} file(s)
+                </h2>
+              </div>
+              <Button variant="outline" onClick={refreshHistory} disabled={historyLoading}>
+                {historyLoading ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <HistoryIcon className="mr-2 h-4 w-4" />
+                )}
+                Refresh
+              </Button>
+            </div>
+
+            {historyLoading ? (
+              <div className="flex items-center gap-2 rounded-md border border-border bg-muted/30 p-4 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading history...
+              </div>
+            ) : historyItems.length === 0 ? (
+              <div className="rounded-md border border-dashed border-border bg-muted/20 p-6 text-sm text-muted-foreground">
+                No reports have been saved yet. Generated Monthly Report files will appear here.
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {historyItems.map((item) => (
+                  <div
+                    key={item.id}
+                    className="flex flex-col gap-3 rounded-md border border-border bg-muted/20 p-4 md:flex-row md:items-center md:justify-between"
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold text-foreground">
+                        {item.fileName}
+                      </div>
+                      <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                        <span>{formatHistoryDate(item.createdAt)}</span>
+                        <span>{item.reportType ?? "Report"}</span>
+                        <span>{item.dates.length} date(s)</span>
+                        {item.pdfCount > 0 && <span>{item.pdfCount} PDF(s)</span>}
+                        <span>
+                          {item.matchedEmployees}/{item.totalEmployees} matched
+                        </span>
+                        <span>{formatBytes(item.size)}</span>
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => previewHistoryItem(item.id)}
+                        disabled={historyPreviewLoading}
+                      >
+                        {historyPreviewLoading ? (
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                          <Eye className="mr-2 h-4 w-4" />
+                        )}
+                        Preview
+                      </Button>
+                      <Button size="sm" onClick={() => downloadHistoryItem(item.id)}>
+                        <Download className="mr-2 h-4 w-4" />
+                        Download
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => removeHistoryItem(item.id)}
+                      >
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        Delete
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+
+          {(historyPreviewLoading || historyPreview) && (
+            <Card className="mt-6 border-border bg-card p-5 shadow-[var(--shadow-soft)]">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs font-bold uppercase text-primary">Preview</div>
+                  <h2 className="mt-1 text-base font-semibold text-foreground">
+                    {historyPreview?.name ?? "Opening saved file"}
+                  </h2>
+                </div>
+              </div>
+              <div className="max-h-[70vh] overflow-auto rounded-md border border-border bg-background">
+                {historyPreviewLoading && !historyPreview ? (
+                  <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Opening history preview...
+                  </div>
+                ) : (
+                  <PreviewTable preview={historyPreview} readOnly />
+                )}
+              </div>
+            </Card>
+          )}
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background">
       <Toaster richColors position="top-center" />
 
-      {/* Hero */}
-      <header className="relative overflow-hidden border-b border-border">
-        <div
-          className="absolute inset-0 opacity-90"
-          style={{ background: "var(--gradient-hero)" }}
-        />
-        <div className="relative mx-auto max-w-6xl px-6 py-14 text-primary-foreground">
-          <div className="flex items-center gap-2 text-sm font-medium opacity-90">
-            <Sparkles className="h-4 w-4" />
-            One-click automated reporting
+      <header className="border-b border-primary/25 bg-[var(--header-surface)]">
+        <div className="mx-auto flex max-w-[1720px] flex-col gap-5 px-5 py-5 sm:px-8 lg:flex-row lg:items-center lg:justify-between lg:px-10">
+          <div className="flex items-center gap-3">
+            <BrandMark icon={<FileSpreadsheet className="h-5 w-5" />} />
+            <div>
+              <h1 className="text-2xl font-bold text-[var(--header-foreground)]">
+                neutropharmacallsummry.com
+              </h1>
+              <ModulePill label="Current Module: Monthly Report" />
+              <p className="text-sm text-[var(--header-muted)]">PDF to Excel report workbench</p>
+            </div>
           </div>
-          <h1 className="mt-3 text-4xl font-bold tracking-tight md:text-5xl">
-            neutropharmacallsummry.com
-          </h1>
-          <p className="mt-4 max-w-2xl text-base opacity-90 md:text-lg">
-            Upload your Active Members Excel and the daily PDF reports. We fill the same Excel with
-            date-wise selfie counts, totals and color-coded performance — in seconds.
-          </p>
-          <div className="mt-6 flex flex-wrap gap-2 text-xs">
-            <Pill icon={<Camera className="h-3 w-3" />} label="Smart selfie extraction" />
-            <Pill icon={<FileSpreadsheet className="h-3 w-3" />} label="Updates same Excel" />
-            <Pill icon={<Database className="h-3 w-3" />} label="Saved history" />
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <Button
+              size="sm"
+              onClick={() => setActiveModule(null)}
+              className="self-start border border-white/70 bg-white text-primary shadow-sm hover:bg-white/90 lg:ml-auto"
+            >
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Back
+            </Button>
           </div>
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl px-6 py-10">
-        {/* Step 1 + 2 */}
-        <div className="grid gap-6 md:grid-cols-2">
-          <UploadCard
-            step={1}
-            title="Active Members Excel"
-            subtitle="Your master file. Will be updated in place."
-            icon={<FileSpreadsheet className="h-5 w-5" />}
-            accept=".xlsx,.xls"
-            onClick={() => excelInputRef.current?.click()}
-          >
-            <input
-              ref={excelInputRef}
-              type="file"
+      <main className="mx-auto grid max-w-[1720px] gap-6 px-5 py-8 sm:px-8 lg:grid-cols-[minmax(0,1fr)_360px] lg:px-10">
+        <div className="space-y-6">
+          <div className="grid gap-4 md:grid-cols-2">
+            <UploadCard
+              step={1}
+              title="Monthly Report Sample"
+              subtitle={excelFile ? "Sample file selected" : "Upload the monthly report sample"}
+              icon={<FileSpreadsheet className="h-5 w-5" />}
               accept=".xlsx,.xls"
-              className="hidden"
-              onChange={onExcelChange}
-            />
-            {excelFile ? (
-              <FilePill name={excelFile.name} onRemove={() => setExcelFile(null)} color="primary" />
-            ) : (
-              <EmptyHint label="Choose .xlsx file" />
-            )}
-          </UploadCard>
+              ready={Boolean(excelFile)}
+              onClick={() => excelInputRef.current?.click()}
+            >
+              <input
+                ref={excelInputRef}
+                type="file"
+                accept=".xlsx,.xls"
+                className="hidden"
+                onChange={onExcelChange}
+              />
+              {excelFile ? (
+                <FilePill
+                  name={excelFile.name}
+                  onRemove={() => {
+                    setExcelFile(null);
+                    setReport(null);
+                    setDownloadUrl(null);
+                    setSheetPreview(null);
+                    setPreviewDirty(false);
+                  }}
+                  color="primary"
+                />
+              ) : (
+                <EmptyHint
+                  icon={<FileSpreadsheet className="h-5 w-5" />}
+                  label="Choose .xlsx file"
+                />
+              )}
+            </UploadCard>
 
-          <UploadCard
-            step={2}
-            title="Daily PDF Reports"
-            subtitle="File names like 2026-04-24.pdf"
-            icon={<FileText className="h-5 w-5" />}
-            accept=".pdf"
-            multiple
-            onClick={() => pdfInputRef.current?.click()}
-          >
-            <input
-              ref={pdfInputRef}
-              type="file"
+            <UploadCard
+              step={2}
+              title="Daily PDF Reports"
+              subtitle={
+                pdfFiles.length
+                  ? `${pdfFiles.length} file(s), ${sortedDates.length} date(s)`
+                  : "Upload one or many dated PDF reports"
+              }
+              icon={<FileText className="h-5 w-5" />}
               accept=".pdf"
               multiple
-              className="hidden"
-              onChange={onPdfChange}
-            />
-            {pdfFiles.length === 0 ? (
-              <EmptyHint label="Choose one or many PDFs" />
-            ) : (
-              <div className="space-y-2">
-                <div className="text-xs text-muted-foreground">
-                  {pdfFiles.length} file(s) · {sortedDates.length} unique date(s)
-                </div>
-                <div className="max-h-40 space-y-1.5 overflow-y-auto pr-1">
-                  {pdfFiles.map((f) => (
-                    <FilePill
-                      key={f.name}
-                      name={f.name}
-                      onRemove={() => removePdf(f.name)}
-                      color="accent"
-                    />
-                  ))}
-                </div>
-              </div>
-            )}
-          </UploadCard>
-        </div>
-
-        {/* Process button */}
-        <Card className="mt-6 border-border bg-card p-6 shadow-[var(--shadow-soft)]">
-          <div className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
-            <div>
-              <h2 className="text-lg font-semibold text-foreground">
-                Step 3 — Generate the report
-              </h2>
-              <p className="text-sm text-muted-foreground">
-                We&apos;ll read every PDF, match exact names to your sheet, fill date columns,
-                calculate totals and color-code performers without changing row order.
-              </p>
-            </div>
-            <Button
-              size="lg"
-              onClick={onProcess}
-              disabled={processing || !excelFile || pdfFiles.length === 0}
-              className="min-w-48 shadow-[var(--shadow-elegant)]"
+              ready={pdfFiles.length > 0}
+              onClick={() => pdfInputRef.current?.click()}
             >
-              {processing ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Processing…
-                </>
+              <input
+                ref={pdfInputRef}
+                type="file"
+                accept=".pdf"
+                multiple
+                className="hidden"
+                onChange={onPdfChange}
+              />
+              {pdfFiles.length === 0 ? (
+                <EmptyHint icon={<FileText className="h-5 w-5" />} label="Choose PDF reports" />
               ) : (
-                <>
-                  <Sparkles className="mr-2 h-4 w-4" />
-                  Process & Update Excel
-                </>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-3 text-xs font-medium text-muted-foreground">
+                    <div className="flex items-center gap-2">
+                      <CalendarDays className="h-3.5 w-3.5" />
+                      {sortedDates.length} unique date(s)
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={clearAllPdfs}
+                      className="h-7 px-2 text-xs"
+                    >
+                      Clear All
+                    </Button>
+                  </div>
+                  <div className="max-h-44 space-y-1.5 overflow-y-auto pr-1">
+                    {pdfFiles.map((f) => (
+                      <FilePill
+                        key={f.name}
+                        name={f.name}
+                        onRemove={() => removePdf(f.name)}
+                        color="accent"
+                      />
+                    ))}
+                  </div>
+                </div>
               )}
-            </Button>
+            </UploadCard>
           </div>
 
-          {processing && (
-            <div className="mt-5 space-y-2">
-              <Progress value={progress} />
-              <div className="text-xs text-muted-foreground">{progressLabel}</div>
+          {/* Process button */}
+          <Card className="border-border bg-card p-6 shadow-[var(--shadow-soft)]">
+            <div className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
+              <div>
+                <div className="text-xs font-bold uppercase text-primary">Step 3</div>
+                <h2 className="mt-1 text-lg font-semibold text-foreground">Generate report</h2>
+                <p className="text-sm text-muted-foreground">
+                  Extraction, validation sheet, database history, and editable Excel export.
+                </p>
+              </div>
+              <Button
+                size="lg"
+                onClick={onProcess}
+                disabled={!canProcess}
+                className="min-w-48 shadow-[var(--shadow-elegant)]"
+              >
+                {processing ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Processing...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="mr-2 h-4 w-4" />
+                    Process & Update Excel
+                  </>
+                )}
+              </Button>
             </div>
-          )}
-        </Card>
+
+            {processing && (
+              <div className="mt-5 space-y-2">
+                <Progress value={progress} />
+                <div className="text-xs text-muted-foreground">{progressLabel}</div>
+              </div>
+            )}
+          </Card>
+        </div>
+
+        <aside className="space-y-4">
+          <Card className="border-border bg-card p-5 shadow-[var(--shadow-soft)]">
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <div className="text-xs font-bold uppercase text-primary">Run status</div>
+                <h2 className="mt-1 text-base font-semibold text-foreground">Workspace</h2>
+              </div>
+              <ShieldCheck className="h-5 w-5 text-primary" />
+            </div>
+            <div className="space-y-3">
+              <ChecklistItem done={Boolean(excelFile)} label="Master Excel attached" />
+              <ChecklistItem done={pdfFiles.length > 0} label="Daily PDFs attached" />
+              <ChecklistItem done={sortedDates.length > 0} label="Dates detected from files" />
+              <ChecklistItem done={Boolean(report)} label="Report generated" />
+              <ChecklistItem done={Boolean(sheetPreview)} label="Manual review opened" />
+            </div>
+          </Card>
+
+          <Card className="border-border bg-card p-5 shadow-[var(--shadow-soft)]">
+            <div className="grid grid-cols-2 gap-3">
+              <CompactMetric
+                icon={<FileText className="h-4 w-4" />}
+                label="PDFs"
+                value={pdfFiles.length}
+              />
+              <CompactMetric
+                icon={<CalendarDays className="h-4 w-4" />}
+                label="Dates"
+                value={sortedDates.length}
+              />
+              <CompactMetric
+                icon={<BarChart3 className="h-4 w-4" />}
+                label="Match"
+                value={matchRate == null ? "-" : `${matchRate}%`}
+              />
+              <CompactMetric
+                icon={<TableProperties className="h-4 w-4" />}
+                label="Rows"
+                value={report?.debug.totalEmployeesDetected ?? "-"}
+              />
+            </div>
+          </Card>
+        </aside>
 
         {/* Report */}
         {report && (
-          <Card className="mt-6 border-border bg-card p-6 shadow-[var(--shadow-soft)]">
+          <Card className="border-border bg-card p-6 shadow-[var(--shadow-soft)] lg:col-span-2">
             <div className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
               <div className="flex items-start gap-3">
                 <div className="flex h-10 w-10 items-center justify-center rounded-full bg-success/15 text-success">
@@ -343,23 +1979,47 @@ function HomePage() {
                 <div>
                   <h3 className="text-lg font-semibold text-foreground">Report ready</h3>
                   <p className="text-sm text-muted-foreground">
-                    Updated <span className="font-medium">{report.fileName}</span> —{" "}
-                    {report.totalEmployees} employees · {report.dates.length} dates ·{" "}
+                    Updated <span className="font-medium">{report.fileName}</span> -{" "}
+                    {report.totalEmployees} employees / {report.dates.length} dates /{" "}
                     {report.matchedEmployees} active performers
                   </p>
                 </div>
               </div>
-              <Button onClick={triggerDownload} size="lg" variant="default">
-                <Download className="mr-2 h-4 w-4" />
-                Download Updated Excel
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  onClick={openFilePreview}
+                  size="lg"
+                  variant="outline"
+                  disabled={previewLoading || previewSaving}
+                >
+                  {previewLoading ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Eye className="mr-2 h-4 w-4" />
+                  )}
+                  Review & Edit
+                </Button>
+                <Button
+                  onClick={triggerDownload}
+                  size="lg"
+                  variant="default"
+                  disabled={previewSaving}
+                >
+                  {previewSaving ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Download className="mr-2 h-4 w-4" />
+                  )}
+                  Download File
+                </Button>
+              </div>
             </div>
 
             <div className="mt-6 grid gap-4 md:grid-cols-3">
               <Stat label="Employees" value={report.totalEmployees} />
               <Stat label="Days covered" value={report.dates.length} />
               <Stat
-                label="Unmatched PDF names"
+                label="Needs review"
                 value={report.unmatchedNames.length}
                 tone={report.unmatchedNames.length ? "warning" : "default"}
               />
@@ -370,7 +2030,7 @@ function HomePage() {
               <Stat label="Detected rows" value={report.debug.totalEmployeesDetected} />
               <Stat label="Matched rows" value={report.debug.totalMatched} />
               <Stat
-                label="Skipped rows"
+                label="Review rows"
                 value={report.debug.totalSkipped}
                 tone={report.debug.totalSkipped ? "warning" : "default"}
               />
@@ -381,6 +2041,73 @@ function HomePage() {
                 tone={report.debug.parsingErrors ? "warning" : "default"}
               />
             </div>
+
+            {(previewLoading || sheetPreview) && (
+              <div ref={previewRef} className="mt-6">
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <div className="text-sm font-semibold text-foreground">
+                    {sheetPreview?.name ?? "Opening file preview"}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="text-xs text-muted-foreground">
+                      Edit any cell inline before downloading.
+                    </div>
+                    {sheetPreview && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={savePreviewEdits}
+                        disabled={!previewDirty || previewSaving}
+                      >
+                        {previewSaving ? (
+                          <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Save className="mr-1.5 h-3.5 w-3.5" />
+                        )}
+                        Apply Edits
+                      </Button>
+                    )}
+                  </div>
+                </div>
+                <div className="max-h-[70vh] overflow-auto rounded-md border border-border bg-background">
+                  {previewLoading && !sheetPreview ? (
+                    <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Opening Excel preview...
+                    </div>
+                  ) : (
+                    <table className="border-collapse text-xs">
+                      <tbody>
+                        {sheetPreview?.rows.map((row, rowIndex) => (
+                          <tr key={`row-${rowIndex}`}>
+                            {row.map((cell) => (
+                              <td
+                                key={cell.key}
+                                className="min-w-24 p-0 align-middle"
+                                style={cell.style}
+                              >
+                                <input
+                                  className="h-full min-h-8 w-full min-w-24 bg-transparent px-2 py-1 text-inherit outline-none focus:bg-primary/10 focus:ring-1 focus:ring-primary"
+                                  value={cell.value}
+                                  onChange={(event) =>
+                                    updatePreviewCell(
+                                      cell.rowNumber,
+                                      cell.colNumber,
+                                      event.target.value,
+                                    )
+                                  }
+                                  aria-label={`Cell ${cell.rowNumber}, ${cell.colNumber}`}
+                                />
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
+            )}
 
             {report.warnings.length > 0 && (
               <div className="mt-6 rounded-md border border-warning/40 bg-warning/10 p-4">
@@ -418,13 +2145,13 @@ function HomePage() {
               <div className="mt-6 rounded-md border border-warning/40 bg-warning/10 p-4">
                 <div className="mb-1 flex items-center gap-2 text-sm font-semibold text-warning-foreground">
                   <AlertTriangle className="h-4 w-4" />
-                  {report.unmatchedNames.length} name(s) in PDFs didn&apos;t match your Active
+                  {report.unmatchedNames.length} row(s) in PDFs need review against your Active
                   Members sheet
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  These were ignored (resigned / not active). Examples:{" "}
+                  These were kept in the Excel output as review rows. Examples:{" "}
                   {report.unmatchedNames.slice(0, 6).join(", ")}
-                  {report.unmatchedNames.length > 6 ? "…" : ""}
+                  {report.unmatchedNames.length > 6 ? "..." : ""}
                 </p>
               </div>
             )}
@@ -435,7 +2162,162 @@ function HomePage() {
   );
 }
 
+function applyThemeColor(color: string) {
+  const root = document.documentElement;
+  const foreground = readableTextColor(color);
+  root.style.setProperty("--primary", color);
+  root.style.setProperty("--primary-foreground", foreground);
+  root.style.setProperty("--primary-glow", `color-mix(in srgb, ${color} 65%, white)`);
+  root.style.setProperty("--accent", color);
+  root.style.setProperty("--accent-foreground", foreground);
+  root.style.setProperty("--header-surface", color);
+  root.style.setProperty("--header-foreground", foreground);
+  root.style.setProperty(
+    "--header-muted",
+    foreground === "#ffffff"
+      ? `color-mix(in srgb, ${color} 18%, white)`
+      : `color-mix(in srgb, ${color} 52%, black)`,
+  );
+  root.style.setProperty("--ring", color);
+  root.style.setProperty(
+    "--gradient-hero",
+    `linear-gradient(135deg, ${color}, color-mix(in srgb, ${color} 68%, white))`,
+  );
+  root.style.setProperty("--shadow-elegant", `0 14px 38px -18px ${hexWithAlpha(color, "66")}`);
+}
+
+function applyThemeMode(mode: "light" | "dark") {
+  document.documentElement.classList.toggle("dark", mode === "dark");
+}
+
+function readableTextColor(hex: string): string {
+  const rgb = hexToRgb(hex);
+  if (!rgb) return "#ffffff";
+  const luminance = (0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b) / 255;
+  return luminance > 0.62 ? "#111827" : "#ffffff";
+}
+
+function hexWithAlpha(hex: string, alpha: string): string {
+  return /^#[0-9a-f]{6}$/i.test(hex) ? `${hex}${alpha}` : hex;
+}
+
+function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
+  const normalized = hex.replace("#", "");
+  if (!/^[0-9a-f]{6}$/i.test(normalized)) return null;
+  return {
+    r: parseInt(normalized.slice(0, 2), 16),
+    g: parseInt(normalized.slice(2, 4), 16),
+    b: parseInt(normalized.slice(4, 6), 16),
+  };
+}
+
+/* ---------- history storage ---------- */
+
+const REPORT_HISTORY_DB = "report-history-db";
+const REPORT_HISTORY_STORE = "reports";
+
+function openReportHistoryDb(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(REPORT_HISTORY_DB, 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(REPORT_HISTORY_STORE)) {
+        db.createObjectStore(REPORT_HISTORY_STORE, { keyPath: "id" });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function addReportHistory(item: StoredReportHistoryItem): Promise<void> {
+  const db = await openReportHistoryDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(REPORT_HISTORY_STORE, "readwrite");
+    tx.objectStore(REPORT_HISTORY_STORE).put(item);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+  db.close();
+}
+
+async function listReportHistory(): Promise<ReportHistoryItem[]> {
+  const db = await openReportHistoryDb();
+  const items = await new Promise<StoredReportHistoryItem[]>((resolve, reject) => {
+    const tx = db.transaction(REPORT_HISTORY_STORE, "readonly");
+    const request = tx.objectStore(REPORT_HISTORY_STORE).getAll();
+    request.onsuccess = () => resolve(request.result ?? []);
+    request.onerror = () => reject(request.error);
+  });
+  db.close();
+  return items
+    .map(({ blob: _blob, ...meta }) => meta)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+}
+
+async function getReportHistory(id: string): Promise<StoredReportHistoryItem | null> {
+  const db = await openReportHistoryDb();
+  const item = await new Promise<StoredReportHistoryItem | undefined>((resolve, reject) => {
+    const tx = db.transaction(REPORT_HISTORY_STORE, "readonly");
+    const request = tx.objectStore(REPORT_HISTORY_STORE).get(id);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  db.close();
+  return item ?? null;
+}
+
+async function deleteReportHistory(id: string): Promise<void> {
+  const db = await openReportHistoryDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(REPORT_HISTORY_STORE, "readwrite");
+    tx.objectStore(REPORT_HISTORY_STORE).delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+  db.close();
+}
+
+function formatHistoryDate(value: string): string {
+  return new Intl.DateTimeFormat("en-PK", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value));
+}
+
+function formatBytes(size: number): string {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 /* ---------- helpers (read employee list once) ---------- */
+
+function extractDateFromPdfName(fileName: string): string | null {
+  const iso = fileName.match(/(\d{4}-\d{2}-\d{2})/);
+  if (iso) return iso[1];
+
+  const named = fileName.match(
+    /\b(\d{1,2})\s*(?:-|_|\s)?\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s*(?:-|_|\s)?\s*(\d{4})\b/i,
+  );
+  if (!named) return null;
+  const months: Record<string, string> = {
+    jan: "01",
+    feb: "02",
+    mar: "03",
+    apr: "04",
+    may: "05",
+    jun: "06",
+    jul: "07",
+    aug: "08",
+    sep: "09",
+    oct: "10",
+    nov: "11",
+    dec: "12",
+  };
+  const month = months[named[2].slice(0, 3).toLowerCase()];
+  return month ? `${named[3]}-${month}-${named[1].padStart(2, "0")}` : null;
+}
 
 async function readEmployees(excelFile: File): Promise<EmployeeInput[]> {
   const ExcelJS = (await import("exceljs")).default;
@@ -494,13 +2376,336 @@ async function readEmployees(excelFile: File): Promise<EmployeeInput[]> {
   return [];
 }
 
+async function buildSheetPreview(blob: Blob, preferredSheetName?: string): Promise<SheetPreview> {
+  const ExcelJS = (await import("exceljs")).default;
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(await blob.arrayBuffer());
+  const ws = (preferredSheetName && wb.getWorksheet(preferredSheetName)) || wb.worksheets[0];
+  const rowCount = Math.max(ws.rowCount || 0, 1);
+  const colCount = Math.max(ws.actualColumnCount || ws.columnCount || 0, 1);
+  const rows: PreviewCell[][] = [];
+
+  for (let r = 1; r <= rowCount; r++) {
+    const row = ws.getRow(r);
+    const previewRow: PreviewCell[] = [];
+    for (let c = 1; c <= colCount; c++) {
+      const cell = row.getCell(c);
+      previewRow.push({
+        key: `${r}-${c}`,
+        rowNumber: r,
+        colNumber: c,
+        value: previewCellText(cell.value),
+        style: previewCellStyle(cell),
+      });
+    }
+    rows.push(previewRow);
+  }
+
+  return { name: ws.name || "Sheet preview", sheetName: ws.name, rows };
+}
+
+async function applySheetPreviewEdits(blob: Blob, preview: SheetPreview): Promise<Blob> {
+  const ExcelJS = (await import("exceljs")).default;
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(await blob.arrayBuffer());
+  const ws = wb.getWorksheet(preview.sheetName) || wb.worksheets[0];
+
+  for (const row of preview.rows) {
+    for (const previewCell of row) {
+      const cell = ws.getRow(previewCell.rowNumber).getCell(previewCell.colNumber);
+      cell.value = coercePreviewValue(previewCell.value, cell.value);
+    }
+  }
+
+  const buf = await wb.xlsx.writeBuffer();
+  return new Blob([buf], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+}
+
+function coercePreviewValue(value: string, originalValue: unknown): string | number | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  if (typeof originalValue === "number") {
+    const numeric = Number(trimmed);
+    return Number.isFinite(numeric) ? numeric : value;
+  }
+
+  if (/^-?\d+(?:\.\d+)?$/.test(trimmed) && !/^0\d+/.test(trimmed)) {
+    const numeric = Number(trimmed);
+    if (Number.isFinite(numeric)) return numeric;
+  }
+
+  return value;
+}
+
+function previewCellText(value: unknown): string {
+  if (value == null) return "";
+  if (value instanceof Date) return value.toLocaleDateString();
+  if (typeof value === "object") {
+    if ("text" in value) return String((value as { text?: unknown }).text ?? "");
+    if ("result" in value) return String((value as { result?: unknown }).result ?? "");
+    if ("richText" in value && Array.isArray((value as { richText?: unknown }).richText)) {
+      return (value as { richText: Array<{ text?: string }> }).richText
+        .map((part) => part.text ?? "")
+        .join("");
+    }
+  }
+  return String(value);
+}
+
+function previewCellStyle(cell: import("exceljs").Cell): React.CSSProperties {
+  const fill = cell.fill;
+  const fgColor =
+    fill && "fgColor" in fill && fill.fgColor && "argb" in fill.fgColor
+      ? argbToCss(fill.fgColor.argb)
+      : undefined;
+
+  return {
+    backgroundColor: fgColor,
+    color:
+      cell.font?.color && "argb" in cell.font.color ? argbToCss(cell.font.color.argb) : undefined,
+    fontWeight: cell.font?.bold ? 700 : 400,
+    textAlign: cell.alignment?.horizontal === "center" ? "center" : "left",
+    verticalAlign: cell.alignment?.vertical === "middle" ? "middle" : "top",
+    borderTop: borderCss(cell.border?.top),
+    borderRight: borderCss(cell.border?.right),
+    borderBottom: borderCss(cell.border?.bottom),
+    borderLeft: borderCss(cell.border?.left),
+    minWidth: 96,
+    maxWidth: 240,
+  };
+}
+
+function borderCss(border?: Partial<import("exceljs").Border>): string {
+  if (!border?.style) return "1px solid transparent";
+  const color = border.color && "argb" in border.color ? argbToCss(border.color.argb) : "#111827";
+  return `1px solid ${color}`;
+}
+
+function argbToCss(argb?: string): string | undefined {
+  if (!argb) return undefined;
+  const hex = argb.length === 8 ? argb.slice(2) : argb;
+  return `#${hex}`;
+}
+
 /* ---------- presentational ---------- */
+
+function BrandMark({ icon }: { icon: React.ReactNode }) {
+  return (
+    <div className="relative flex h-12 w-12 shrink-0 items-center justify-center">
+      <span className="absolute left-0 top-1 h-7 w-7 rounded-full bg-primary/35" />
+      <span className="absolute right-0 top-1.5 h-7 w-7 rounded-full bg-primary/25" />
+      <span className="absolute bottom-0 left-2.5 h-7 w-7 rounded-full bg-primary/45" />
+      <span className="relative flex h-10 w-10 items-center justify-center rounded-md bg-primary text-primary-foreground shadow-[var(--shadow-soft)] ring-2 ring-white/80">
+        {icon}
+      </span>
+    </div>
+  );
+}
+
+function ThemeCustomizer({
+  color,
+  mode,
+  onChange,
+  onToggleMode,
+}: {
+  color: string;
+  mode: "light" | "dark";
+  onChange: (color: string) => void;
+  onToggleMode: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      if (!panelRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    return () => document.removeEventListener("mousedown", closeOnOutsideClick);
+  }, [open]);
+
+  return (
+    <div ref={panelRef} className="fixed right-8 top-4 z-50 sm:right-14 lg:right-20">
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={onToggleMode}
+          className="flex items-center gap-2 rounded-md border border-border bg-card px-2.5 py-2 text-sm font-semibold text-foreground shadow-[var(--shadow-soft)] transition hover:border-primary/40 hover:shadow-[var(--shadow-elegant)] sm:px-3"
+          aria-label={`Switch to ${mode === "dark" ? "light" : "dark"} theme`}
+        >
+          {mode === "dark" ? (
+            <Sun className="h-4 w-4 text-primary" />
+          ) : (
+            <Moon className="h-4 w-4 text-primary" />
+          )}
+          <span className="hidden sm:inline">{mode === "dark" ? "Light" : "Dark"}</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setOpen((current) => !current)}
+          className="flex items-center gap-2 rounded-md border border-border bg-card px-2.5 py-2 text-sm font-semibold text-foreground shadow-[var(--shadow-soft)] transition hover:border-primary/40 hover:shadow-[var(--shadow-elegant)] sm:px-3"
+          aria-expanded={open}
+          aria-label="Open color settings"
+        >
+          <span className="flex h-7 w-7 items-center justify-center">
+            <ColorSplashMark />
+          </span>
+          <span className="hidden sm:inline">Colors</span>
+        </button>
+      </div>
+
+      {open && (
+        <div className="absolute right-0 mt-2 w-52 rounded-md border border-border bg-card/98 p-3 shadow-[var(--shadow-elegant)] backdrop-blur">
+          <div className="mb-2 text-xs font-bold uppercase tracking-wide text-muted-foreground">
+            Theme Color
+          </div>
+          <div className="grid grid-cols-5 gap-2">
+            {THEME_COLORS.map((item) => (
+              <button
+                key={item}
+                type="button"
+                className={`h-8 w-8 rounded-md border shadow-sm transition hover:scale-105 ${
+                  color.toLowerCase() === item.toLowerCase()
+                    ? "border-foreground ring-2 ring-primary/25"
+                    : "border-border"
+                }`}
+                style={{ backgroundColor: item }}
+                onClick={() => onChange(item)}
+                aria-label={`Use color ${item}`}
+                title={item}
+              />
+            ))}
+          </div>
+          <label className="mt-3 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+            Custom
+            <input
+              type="color"
+              value={color}
+              onChange={(event) => onChange(event.target.value)}
+              className="h-8 w-14 cursor-pointer rounded border border-border bg-background p-1"
+              aria-label="Choose custom theme color"
+            />
+          </label>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ColorSplashMark() {
+  return (
+    <span className="relative block h-7 w-7 overflow-hidden rounded-md bg-white">
+      <span className="absolute left-0 top-0 h-4 w-7 rounded-[999px] bg-[linear-gradient(135deg,#1d7eea_0%,#22a7f0_30%,#b830d8_52%,#ff8a00_76%,#ffd400_100%)]" />
+      <span className="absolute left-1 top-2 h-4 w-1.5 rounded-full bg-[#2864e6]" />
+      <span className="absolute left-[9px] top-3 h-3 w-1.5 rounded-full bg-[#7a1fd1]" />
+      <span className="absolute left-[15px] top-2 h-5 w-1.5 rounded-full bg-[#9b22cc]" />
+      <span className="absolute right-1 top-3 h-4 w-1.5 rounded-full bg-[#f05a00]" />
+      <span className="absolute left-[14px] top-[15px] h-1.5 w-1.5 rounded-full bg-white ring-1 ring-[#9b22cc]" />
+    </span>
+  );
+}
+
+function ModulePill({ label }: { label: string }) {
+  return (
+    <div className="mt-1 inline-flex items-center rounded-md border border-white/20 bg-white/10 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-white">
+      {label}
+    </div>
+  );
+}
+
+function FunctionCard({
+  title,
+  description,
+  icon,
+  onClick,
+  disabled = false,
+  className = "",
+}: {
+  title: string;
+  description: string;
+  icon: React.ReactNode;
+  onClick?: () => void;
+  disabled?: boolean;
+  className?: string;
+}) {
+  return (
+    <Card
+      className={`min-h-52 border-border bg-[var(--gradient-card)] p-5 shadow-[var(--shadow-soft)] transition ${
+        disabled ? "opacity-70" : "hover:border-primary/35 hover:shadow-[var(--shadow-elegant)]"
+      } ${className}`}
+    >
+      <div className="flex h-full flex-col gap-5">
+        <div className="flex items-start gap-3">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground shadow-sm">
+            {icon}
+          </div>
+          <div className="min-w-0 flex-1">
+            <h3 className="text-lg font-semibold text-foreground">{title}</h3>
+            <p className="mt-1 min-h-12 text-sm leading-5 text-muted-foreground">{description}</p>
+          </div>
+        </div>
+        <Button
+          className="mt-auto h-10 w-full bg-primary text-primary-foreground shadow-sm hover:bg-primary/90"
+          onClick={onClick}
+          disabled={disabled}
+        >
+          {disabled ? "Coming Soon" : "Open"}
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
+function PreviewTable({
+  preview,
+  readOnly = false,
+  onCellChange,
+}: {
+  preview: SheetPreview | null;
+  readOnly?: boolean;
+  onCellChange?: (rowNumber: number, colNumber: number, value: string) => void;
+}) {
+  if (!preview) return null;
+
+  return (
+    <table className="border-collapse text-xs">
+      <tbody>
+        {preview.rows.map((row, rowIndex) => (
+          <tr key={`row-${rowIndex}`}>
+            {row.map((cell) => (
+              <td key={cell.key} className="min-w-24 p-0 align-middle" style={cell.style}>
+                {readOnly ? (
+                  <div className="min-h-8 min-w-24 px-2 py-1 text-inherit">{cell.value}</div>
+                ) : (
+                  <input
+                    className="h-full min-h-8 w-full min-w-24 bg-transparent px-2 py-1 text-inherit outline-none focus:bg-primary/10 focus:ring-1 focus:ring-primary"
+                    value={cell.value}
+                    onChange={(event) =>
+                      onCellChange?.(cell.rowNumber, cell.colNumber, event.target.value)
+                    }
+                    aria-label={`Cell ${cell.rowNumber}, ${cell.colNumber}`}
+                  />
+                )}
+              </td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
 
 function UploadCard({
   step,
   title,
   subtitle,
   icon,
+  ready = false,
   onClick,
   children,
 }: {
@@ -510,14 +2715,18 @@ function UploadCard({
   icon: React.ReactNode;
   accept: string;
   multiple?: boolean;
+  ready?: boolean;
   onClick: () => void;
   children: React.ReactNode;
 }) {
   return (
-    <Card className="border-border bg-card p-6 shadow-[var(--shadow-soft)]">
+    <Card className="border-border bg-card p-5 shadow-[var(--shadow-soft)] transition-shadow hover:shadow-[var(--shadow-elegant)]">
       <div className="mb-4 flex items-start justify-between">
         <div>
-          <div className="text-xs font-bold uppercase tracking-wider text-primary">Step {step}</div>
+          <div className="flex items-center gap-2 text-xs font-bold uppercase text-primary">
+            Step {step}
+            {ready && <Check className="h-3.5 w-3.5 text-success" />}
+          </div>
           <h2 className="mt-1 flex items-center gap-2 text-lg font-semibold text-foreground">
             <span className="flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
               {icon}
@@ -531,15 +2740,24 @@ function UploadCard({
           Upload
         </Button>
       </div>
-      <div className="rounded-md border border-dashed border-border bg-muted/30 p-3">
+      <div
+        className={`min-h-24 rounded-md border border-dashed p-3 ${
+          ready ? "border-success/40 bg-success/5" : "border-border bg-muted/30"
+        }`}
+      >
         {children}
       </div>
     </Card>
   );
 }
 
-function EmptyHint({ label }: { label: string }) {
-  return <div className="py-4 text-center text-sm text-muted-foreground">{label}</div>;
+function EmptyHint({ icon, label }: { icon: React.ReactNode; label: string }) {
+  return (
+    <div className="flex min-h-16 flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground">
+      <span className="text-primary">{icon}</span>
+      {label}
+    </div>
+  );
 }
 
 function FilePill({
@@ -571,12 +2789,63 @@ function FilePill({
   );
 }
 
-function Pill({ icon, label }: { icon: React.ReactNode; label: string }) {
+function StatusChip({
+  icon,
+  label,
+  active,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  active: boolean;
+}) {
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1 backdrop-blur-sm">
+    <div
+      className={`inline-flex min-h-9 items-center gap-2 rounded-md border px-3 text-xs font-medium ${
+        active
+          ? "border-success/30 bg-success/10 text-foreground"
+          : "border-border bg-muted/40 text-muted-foreground"
+      }`}
+    >
       {icon}
       {label}
-    </span>
+    </div>
+  );
+}
+
+function ChecklistItem({ done, label }: { done: boolean; label: string }) {
+  return (
+    <div className="flex items-center gap-2 text-sm">
+      <span
+        className={`flex h-5 w-5 items-center justify-center rounded-full border ${
+          done
+            ? "border-success bg-success text-success-foreground"
+            : "border-border bg-muted text-muted-foreground"
+        }`}
+      >
+        {done && <Check className="h-3 w-3" />}
+      </span>
+      <span className={done ? "text-foreground" : "text-muted-foreground"}>{label}</span>
+    </div>
+  );
+}
+
+function CompactMetric({
+  icon,
+  label,
+  value,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: number | string;
+}) {
+  return (
+    <div className="rounded-md border border-border bg-muted/25 p-3">
+      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <span className="text-primary">{icon}</span>
+        {label}
+      </div>
+      <div className="mt-1 text-xl font-bold text-foreground">{value}</div>
+    </div>
   );
 }
 

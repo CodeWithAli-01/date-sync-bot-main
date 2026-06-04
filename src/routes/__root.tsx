@@ -66,6 +66,12 @@ export const Route = createRootRoute({
         rel: "stylesheet",
         href: appCss,
       },
+      {
+        rel: "icon",
+        type: "image/svg+xml",
+        href:
+          "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230b6f6a'/%3E%3Cpath d='M18 18h28v28H18zM18 27h28M18 36h28M27 18v28M37 18v28' fill='none' stroke='white' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E",
+      },
     ],
   }),
   shellComponent: RootShell,
