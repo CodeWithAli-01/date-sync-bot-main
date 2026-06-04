@@ -5,6 +5,13 @@ const DEVICE_ID_KEY = "reporting-management-device-id";
 const DEVICE_BLOCK_MESSAGE =
   "This account is already active on 2 devices. Please sign out from another device and try again.";
 
+let activeClaim:
+  | {
+      key: string;
+      promise: Promise<DeviceLimitResult>;
+    }
+  | undefined;
+
 export interface DeviceLimitResult {
   allowed: boolean;
   message?: string;
@@ -16,7 +23,25 @@ export async function enforceDeviceLimit(session: Session): Promise<DeviceLimitR
   if (typeof window === "undefined") return { allowed: true };
 
   const deviceId = getOrCreateDeviceId();
+  const claimKey = `${session.user.id}:${deviceId}`;
+  if (activeClaim?.key === claimKey) return activeClaim.promise;
+
   const userAgent = window.navigator.userAgent;
+  const promise = claimDevice(session, deviceId, userAgent);
+  activeClaim = { key: claimKey, promise };
+
+  try {
+    return await promise;
+  } finally {
+    if (activeClaim?.promise === promise) activeClaim = undefined;
+  }
+}
+
+async function claimDevice(
+  session: Session,
+  deviceId: string,
+  userAgent: string,
+): Promise<DeviceLimitResult> {
   const { data, error } = await supabase.rpc("claim_auth_device", {
     p_device_id: deviceId,
     p_user_agent: userAgent,
