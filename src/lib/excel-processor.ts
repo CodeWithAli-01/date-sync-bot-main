@@ -494,7 +494,6 @@ function findDatePairColumns(
     nextCol += 4;
   }
 
-  header.height = Math.max(header.height || 0, 24);
   header.commit?.();
   return pairs;
 }
@@ -638,19 +637,19 @@ function fillMonthlyTotals(
     const callsFormula = sumFormula(callCols, r);
     const callsResult = rowSum(ws, callCols, r);
     callsCell.value = callsFormula ? { formula: callsFormula, result: callsResult } : null;
-    styleBodyCell(callsCell, callsResult === 0 ? "zero" : "normal");
+    styleBodyCell(callsCell);
 
     const callsAvgCell = row.getCell(monthlyTotals.callsAvgCol);
     const callsAvgFormula = averageFormula(callCols, r);
     const callsAvgResult = rowAverage(ws, callCols, r);
     callsAvgCell.value = callsAvgFormula ? { formula: callsAvgFormula, result: callsAvgResult } : null;
-    styleBodyCell(callsAvgCell, callsAvgResult === 0 ? "zero" : "normal");
+    styleBodyCell(callsAvgCell);
 
     const selfiesCell = row.getCell(monthlyTotals.selfiesCol);
     const selfiesFormula = sumFormula(selfieCols, r);
     const selfiesResult = rowSum(ws, selfieCols, r);
     selfiesCell.value = selfiesFormula ? { formula: selfiesFormula, result: selfiesResult } : null;
-    styleBodyCell(selfiesCell, selfiesResult === 0 ? "zero" : "normal");
+    styleBodyCell(selfiesCell);
 
     const selfiesAvgCell = row.getCell(monthlyTotals.selfiesAvgCol);
     const selfiesAvgFormula = averageFormula(selfieCols, r);
@@ -658,7 +657,7 @@ function fillMonthlyTotals(
     selfiesAvgCell.value = selfiesAvgFormula
       ? { formula: selfiesAvgFormula, result: selfiesAvgResult }
       : null;
-    styleBodyCell(selfiesAvgCell, selfiesAvgResult === 0 ? "zero" : "normal");
+    styleBodyCell(selfiesAvgCell);
     row.commit?.();
   }
 }
@@ -676,8 +675,12 @@ function ensureMasterHeaders(ws: ExcelJS.Worksheet, det: DetectedSheet) {
   for (const [col, label] of headers) {
     if (!col) continue;
     const cell = row.getCell(col);
-    if (!cellText(cell).trim()) cell.value = label;
-    styleHeader(cell);
+    if (!cellText(cell).trim()) {
+      cell.value = label;
+      styleHeader(cell);
+    } else {
+      keepTemplateHeaderStyle(cell);
+    }
   }
 }
 
@@ -848,29 +851,29 @@ export async function processExcel(
       if (pair.plannedCol) {
         const plannedCell = row.getCell(pair.plannedCol);
         plannedCell.value = value ? value.planned : null;
-        styleBodyCell(plannedCell, !value || value.planned === 0 ? "zero" : "normal");
+        styleBodyCell(plannedCell);
       }
 
       if (pair.unplannedCol) {
         const unplannedCell = row.getCell(pair.unplannedCol);
         unplannedCell.value = value ? value.unplanned : null;
-        styleBodyCell(unplannedCell, !value || value.unplanned === 0 ? "zero" : "normal");
+        styleBodyCell(unplannedCell);
       }
 
       if (pair.callsCol) {
         const callsCell = row.getCell(pair.callsCol);
         callsCell.value = value ? value.total : null;
-        styleBodyCell(callsCell, !value || value.total === 0 ? "zero" : "normal");
+        styleBodyCell(callsCell);
       }
 
       const selfieCell = row.getCell(pair.selfiesCol);
       selfieCell.value = value ? value.selfies : null;
-      styleBodyCell(selfieCell, !value || value.selfies === 0 ? "zero" : "normal");
+      styleBodyCell(selfieCell);
 
       if (!pair.callsCol) {
         const totalCell = row.getCell(pair.totalCol);
         totalCell.value = value ? value.total : null;
-        styleBodyCell(totalCell, !value || value.total === 0 ? "zero" : "normal");
+        styleBodyCell(totalCell);
       }
     }
 
@@ -1004,7 +1007,7 @@ function addPdfAuditSheet(
         validation,
       });
       added.eachCell((cell) => {
-        styleBodyCell(cell, validation === "Matched" ? "normal" : "zero");
+        styleBodyCell(cell);
       });
     }
   }
@@ -1043,26 +1046,26 @@ function appendUnmatchedRows(
       if (pair.plannedCol) {
         const plannedCell = row.getCell(pair.plannedCol);
         plannedCell.value = item.row.planned || null;
-        styleBodyCell(plannedCell, item.row.planned > 0 ? "normal" : "zero");
+        styleBodyCell(plannedCell);
       }
       if (pair.unplannedCol) {
         const unplannedCell = row.getCell(pair.unplannedCol);
         unplannedCell.value = item.row.unplanned || null;
-        styleBodyCell(unplannedCell, item.row.unplanned > 0 ? "normal" : "zero");
+        styleBodyCell(unplannedCell);
       }
       if (pair.callsCol) {
         const callsCell = row.getCell(pair.callsCol);
         callsCell.value = item.row.total || null;
-        styleBodyCell(callsCell, item.row.total > 0 ? "normal" : "zero");
+        styleBodyCell(callsCell);
       }
       const selfieCell = row.getCell(pair.selfiesCol);
       selfieCell.value = item.row.count || null;
-      styleBodyCell(selfieCell, item.row.count > 0 ? "normal" : "zero");
+      styleBodyCell(selfieCell);
 
       if (!pair.callsCol) {
         const totalCell = row.getCell(pair.totalCol);
         totalCell.value = item.row.total || null;
-        styleBodyCell(totalCell, item.row.total > 0 ? "normal" : "zero");
+        styleBodyCell(totalCell);
       }
     }
 
@@ -1087,18 +1090,20 @@ function thinBorder(): Partial<ExcelJS.Borders> {
 
 function styleHeader(cell: ExcelJS.Cell) {
   cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-  cell.font = { bold: true, color: { argb: "FF000000" } };
+  cell.font = { ...(cell.font ?? {}), bold: true, color: { argb: "FF000000" } };
   cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFF00" } };
   cell.border = thinBorder();
 }
 
-function styleBodyCell(cell: ExcelJS.Cell, tone: "normal" | "zero") {
+function keepTemplateHeaderStyle(cell: ExcelJS.Cell) {
+  cell.alignment = { ...(cell.alignment ?? {}), vertical: "middle", wrapText: true };
+  cell.border = thinBorder();
+}
+
+function styleBodyCell(cell: ExcelJS.Cell) {
   cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
   cell.border = thinBorder();
-  cell.fill =
-    tone === "zero"
-      ? { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFFFF" } }
-      : { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFF00" } };
+  cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFFFF" } };
 }
 
 function applyBordersAndWidths(
@@ -1114,22 +1119,12 @@ function applyBordersAndWidths(
       const cell = row.getCell(c);
       cell.border = thinBorder();
       if (r === headerRow) {
-        styleHeader(cell);
+        keepTemplateHeaderStyle(cell);
       } else if (SPECIAL_TEXT.includes(normalize(cellText(cell)))) {
         cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
         cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFF00" } };
       }
     }
-    row.height = r === headerRow ? Math.max(row.height || 0, 24) : row.height;
     row.commit?.();
-  }
-
-  for (let c = 1; c <= lastCol; c++) {
-    const column = ws.getColumn(c);
-    let maxLength = 8;
-    for (let r = headerRow; r <= Math.max(dataEndRow, dataStartRow); r++) {
-      maxLength = Math.max(maxLength, cellText(ws.getRow(r).getCell(c)).length);
-    }
-    column.width = Math.min(Math.max(maxLength + 2, column.width || 8), 35);
   }
 }
