@@ -36,25 +36,25 @@
 }
 
 :root {
-  --radius: 1rem;
+  --radius: 0.95rem;
 
-  --background: oklch(0.955 0.018 205);
+  --background: oklch(0.94 0.018 205);
   --foreground: oklch(0.18 0.035 230);
 
-  --card: oklch(0.955 0.018 205);
+  --card: oklch(0.945 0.018 205);
   --card-foreground: oklch(0.18 0.04 250);
 
-  --popover: oklch(0.965 0.016 205);
+  --popover: oklch(0.95 0.016 205);
   --popover-foreground: oklch(0.18 0.04 250);
 
   --primary: oklch(0.43 0.12 190);
   --primary-foreground: #ffffff;
   --primary-glow: oklch(0.66 0.13 185);
 
-  --secondary: oklch(0.94 0.018 215);
+  --secondary: oklch(0.91 0.018 215);
   --secondary-foreground: oklch(0.25 0.04 250);
 
-  --muted: oklch(0.93 0.018 215);
+  --muted: oklch(0.9 0.018 215);
   --muted-foreground: oklch(0.5 0.03 250);
 
   --accent: oklch(0.43 0.12 190);
@@ -69,38 +69,36 @@
   --destructive: oklch(0.6 0.22 25);
   --destructive-foreground: oklch(0.99 0.005 240);
 
-  --border: oklch(0.88 0.022 215 / 70%);
-  --input: oklch(0.88 0.022 215);
+  --border: oklch(0.82 0.026 215 / 58%);
+  --input: oklch(0.88 0.022 215 / 78%);
   --ring: oklch(0.43 0.12 190);
 
   --gradient-hero: linear-gradient(135deg, oklch(0.43 0.12 190), oklch(0.74 0.16 35));
   --header-surface: var(--primary);
   --header-foreground: #ffffff;
   --header-muted: #b9fff2;
-  --gradient-card: linear-gradient(145deg, oklch(0.98 0.012 205), oklch(0.925 0.02 215));
-  --shadow-soft:
-    10px 10px 24px oklch(0.63 0.035 215 / 0.34),
-    -10px -10px 24px oklch(1 0 0 / 0.92);
+  --gradient-card: linear-gradient(145deg, oklch(0.96 0.014 205), oklch(0.9 0.02 215));
+  --shadow-soft: 10px 10px 22px oklch(0.66 0.035 215 / 0.34), -10px -10px 22px oklch(1 0 0 / 0.88);
   --shadow-elegant:
-    16px 16px 36px oklch(0.56 0.04 215 / 0.36),
-    -14px -14px 34px oklch(1 0 0 / 0.95);
+    18px 18px 42px oklch(0.58 0.04 215 / 0.35), -16px -16px 38px oklch(1 0 0 / 0.92);
   --shadow-inset:
-    inset 7px 7px 14px oklch(0.66 0.035 215 / 0.32),
-    inset -7px -7px 14px oklch(1 0 0 / 0.88);
+    inset 7px 7px 14px oklch(0.63 0.035 215 / 0.28), inset -7px -7px 14px oklch(1 0 0 / 0.82);
+  --shadow-inset-sm:
+    inset 3px 3px 7px oklch(0.63 0.035 215 / 0.24), inset -3px -3px 7px oklch(1 0 0 / 0.8);
 }
 
 .dark {
-  --background: oklch(0.18 0.028 240);
-  --foreground: oklch(0.98 0.005 240);
-  --card: oklch(0.18 0.028 240);
+  --background: oklch(0.19 0.025 235);
+  --foreground: oklch(0.95 0.006 240);
+  --card: oklch(0.22 0.026 235);
   --card-foreground: oklch(0.98 0.005 240);
-  --popover: oklch(0.21 0.028 240);
+  --popover: oklch(0.24 0.028 240);
   --popover-foreground: oklch(0.98 0.005 240);
-  --secondary: oklch(0.23 0.03 250);
+  --secondary: oklch(0.26 0.03 250);
   --secondary-foreground: oklch(0.98 0.005 240);
-  --muted: oklch(0.23 0.03 250);
-  --muted-foreground: oklch(0.7 0.02 250);
-  --accent: oklch(0.34 0.07 190);
+  --muted: oklch(0.27 0.03 250);
+  --muted-foreground: oklch(0.72 0.02 250);
+  --accent: oklch(0.48 0.11 190);
   --accent-foreground: oklch(0.98 0.005 240);
   --success: oklch(0.65 0.17 155);
   --success-foreground: oklch(0.99 0.005 240);
@@ -108,21 +106,16 @@
   --warning-foreground: oklch(0.2 0.04 60);
   --destructive: oklch(0.65 0.22 25);
   --destructive-foreground: oklch(0.99 0.005 240);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --gradient-card: linear-gradient(145deg, oklch(0.23 0.026 240), oklch(0.15 0.028 240));
+  --border: oklch(1 0 0 / 9%);
+  --input: oklch(1 0 0 / 12%);
+  --gradient-card: linear-gradient(145deg, oklch(0.25 0.026 238), oklch(0.17 0.026 238));
   --header-surface: var(--primary);
   --header-foreground: oklch(0.98 0.005 240);
   --header-muted: oklch(0.78 0.09 185);
-  --shadow-soft:
-    10px 10px 24px oklch(0 0 0 / 0.55),
-    -8px -8px 22px oklch(1 0 0 / 0.055);
-  --shadow-elegant:
-    16px 16px 34px oklch(0 0 0 / 0.62),
-    -10px -10px 28px oklch(1 0 0 / 0.06);
-  --shadow-inset:
-    inset 7px 7px 14px oklch(0 0 0 / 0.52),
-    inset -7px -7px 14px oklch(1 0 0 / 0.055);
+  --shadow-soft: 10px 10px 24px oklch(0 0 0 / 0.54), -8px -8px 22px oklch(1 0 0 / 0.07);
+  --shadow-elegant: 18px 18px 40px oklch(0 0 0 / 0.66), -12px -12px 30px oklch(1 0 0 / 0.075);
+  --shadow-inset: inset 7px 7px 14px oklch(0 0 0 / 0.56), inset -7px -7px 14px oklch(1 0 0 / 0.06);
+  --shadow-inset-sm: inset 3px 3px 7px oklch(0 0 0 / 0.5), inset -3px -3px 7px oklch(1 0 0 / 0.055);
 }
 
 @layer base {
@@ -131,7 +124,16 @@
   }
   body {
     background:
-      radial-gradient(circle at 18% 12%, color-mix(in srgb, var(--primary) 9%, transparent), transparent 28rem),
+      radial-gradient(
+        circle at 18% 12%,
+        color-mix(in srgb, var(--primary) 9%, transparent),
+        transparent 28rem
+      ),
+      radial-gradient(
+        circle at 88% 8%,
+        color-mix(in srgb, #2563eb 8%, transparent),
+        transparent 24rem
+      ),
       linear-gradient(145deg, color-mix(in srgb, var(--background) 96%, white), var(--background));
     color: var(--color-foreground);
     font-feature-settings: "cv11", "ss01";
@@ -185,5 +187,96 @@
   select {
     box-shadow: var(--shadow-inset);
   }
+}
 
+@layer components {
+  .neuro-panel,
+  .neuro-hero,
+  .neuro-sidebar {
+    border: 1px solid color-mix(in srgb, var(--border) 78%, white 12%);
+    background: var(--gradient-card);
+    box-shadow: var(--shadow-soft);
+  }
+
+  .neuro-panel,
+  .neuro-hero {
+    border-radius: 1.25rem;
+  }
+
+  .neuro-sidebar {
+    background: linear-gradient(145deg, color-mix(in srgb, var(--card) 92%, white), var(--card));
+    box-shadow: var(--shadow-elegant);
+    backdrop-filter: blur(16px);
+  }
+
+  .neuro-inset {
+    border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+    border-radius: 1rem;
+    background: color-mix(in srgb, var(--card) 92%, var(--background));
+    box-shadow: var(--shadow-inset);
+  }
+
+  .neuro-nav-item,
+  .neuro-user,
+  .neuro-brand,
+  .neuro-button,
+  .neuro-button-muted,
+  .neuro-list-row {
+    transform: translateY(0) scale(1);
+    transition:
+      transform 180ms ease,
+      box-shadow 180ms ease,
+      background-color 180ms ease,
+      color 180ms ease,
+      border-color 180ms ease;
+  }
+
+  .neuro-nav-item,
+  .neuro-user {
+    color: var(--foreground);
+  }
+
+  .neuro-nav-item:hover,
+  .neuro-user:hover,
+  .neuro-brand:hover,
+  .neuro-list-row:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-soft);
+  }
+
+  .neuro-nav-item.is-active,
+  .neuro-user.is-active {
+    background: color-mix(in srgb, var(--primary) 12%, var(--card));
+    box-shadow: var(--shadow-inset);
+    color: var(--primary);
+  }
+
+  .neuro-button,
+  .neuro-button-muted {
+    border-radius: 0.95rem;
+    box-shadow: var(--shadow-soft);
+  }
+
+  .neuro-button:hover,
+  .neuro-button-muted:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-elegant);
+  }
+
+  .neuro-button:active,
+  .neuro-button-muted:active,
+  .neuro-nav-item:active,
+  .neuro-user:active {
+    transform: translateY(0) scale(0.98);
+    box-shadow: var(--shadow-inset);
+  }
+
+  .neuro-button-muted {
+    background: color-mix(in srgb, var(--card) 88%, var(--background));
+  }
+
+  .neuro-list-row {
+    border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+    background: color-mix(in srgb, var(--card) 90%, var(--background));
+  }
 }

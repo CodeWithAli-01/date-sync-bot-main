@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowLeft,
+  Activity,
   BarChart3,
   CalendarDays,
   Check,
@@ -27,6 +27,16 @@ import {
   LogOut,
   Mail,
   UserPlus,
+  Home,
+  UserCircle,
+  Settings,
+  Clock3,
+  Database,
+  LineChart,
+  PieChart,
+  TrendingUp,
+  Users,
+  Zap,
 } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
 import { Button } from "@/components/ui/button";
@@ -68,6 +78,7 @@ type ActiveModule =
   | "doctor-coverage"
   | "monthly-planned"
   | "history"
+  | "profile"
   | null;
 
 interface ReportHistoryItem {
@@ -85,6 +96,8 @@ interface ReportHistoryItem {
 interface StoredReportHistoryItem extends ReportHistoryItem {
   blob: Blob;
 }
+
+const APP_NAME = "Reporting Management";
 
 const DASHBOARD_LINES = [
   "Work smarter with clean reports and reliable matching.",
@@ -112,11 +125,11 @@ export const Route = createFileRoute("/")({
   component: HomePage,
   head: () => ({
     meta: [
-      { title: "neutropharmacallsummry.com" },
+      { title: APP_NAME },
       {
         name: "description",
         content:
-          "neutropharmacallsummry.com builds date-wise pharma selfie and total reports from PDFs into your Active Members Excel.",
+          "Reporting Management builds date-wise pharma selfie and total reports from PDFs into your Active Members Excel.",
       },
     ],
   }),
@@ -836,112 +849,64 @@ function HomePage() {
     );
   }
 
-  const accountControls = (
-    <AccountControls user={authUser} signingOut={signingOut} onSignOut={signOut} />
-  );
-
   if (!activeModule) {
     return (
-      <div className="min-h-screen bg-background">
-        <Toaster richColors position="top-center" />
-        <ThemeCustomizer
+      <AppShell
+        activeModule={activeModule}
+        dashboardLine={dashboardLine}
+        user={authUser}
+        onNavigate={setActiveModule}
+        onOpenHistory={openHistory}
+      >
+        <DashboardHome
+          historyItems={historyItems}
+          historyLoading={historyLoading}
+          onNavigate={setActiveModule}
+          onOpenHistory={openHistory}
+        />
+      </AppShell>
+    );
+  }
+
+  if (activeModule === "profile") {
+    return (
+      <AppShell
+        activeModule={activeModule}
+        dashboardLine={dashboardLine}
+        user={authUser}
+        onNavigate={setActiveModule}
+        onOpenHistory={openHistory}
+      >
+        <ProfilePage
+          user={authUser}
           color={themeColor}
           mode={themeMode}
+          signingOut={signingOut}
           onChange={updateThemeColor}
           onToggleMode={toggleThemeMode}
+          onSignOut={signOut}
         />
-
-        <header className="border-b border-primary/25 bg-[var(--header-surface)]">
-          <div className="flex w-full flex-col gap-4 px-5 py-4 sm:px-6 md:flex-row md:items-center md:justify-between lg:pr-72">
-            <div className="flex items-center gap-3">
-              <BrandMark icon={<TableProperties className="h-5 w-5" />} />
-              <div>
-                <h1 className="text-xl font-bold text-[var(--header-foreground)]">
-                  neutropharmacallsummry.com
-                </h1>
-                <p className="text-sm font-medium text-[var(--header-muted)]">{dashboardLine}</p>
-              </div>
-            </div>
-            {accountControls}
-          </div>
-        </header>
-
-        <main className="mx-auto min-h-[calc(100vh-92px)] max-w-[1720px] px-5 py-7 sm:px-8 lg:px-10">
-          <div className="mb-5">
-            <div className="text-xs font-bold uppercase tracking-wide text-primary">Workspace</div>
-            <h2 className="mt-1 text-lg font-semibold text-foreground">Dashboard</h2>
-          </div>
-
-          <div className="grid gap-5 md:grid-cols-2">
-            <FunctionCard
-              title="Daily Report"
-              description="Use two Excel files only: a call log and your daily report sample template."
-              icon={<TableProperties className="h-6 w-6" />}
-              onClick={() => setActiveModule("daily-report")}
-            />
-            <FunctionCard
-              title="Monthly Report"
-              description="Update the monthly Excel sheet with date-wise data from daily PDF reports."
-              icon={<FileSpreadsheet className="h-6 w-6" />}
-              onClick={() => setActiveModule("monthly-report")}
-            />
-            <FunctionCard
-              title="Doctor Coverage"
-              description="Add target doctors, covered doctors, and coverage percentage to a sample file."
-              icon={<BarChart3 className="h-6 w-6" />}
-              onClick={() => setActiveModule("doctor-coverage")}
-            />
-            <FunctionCard
-              title="Monthly Planned Unplanned"
-              description="Create monthly planned, unplanned, total call averages, and CP average time."
-              icon={<CalendarDays className="h-6 w-6" />}
-              onClick={() => setActiveModule("monthly-planned")}
-            />
-            <FunctionCard
-              title="History"
-              description="View, preview, and download previously generated report files."
-              icon={<HistoryIcon className="h-6 w-6" />}
-              onClick={openHistory}
-              className="md:col-span-2"
-            />
-          </div>
-        </main>
-      </div>
+      </AppShell>
     );
   }
 
   if (activeModule === "daily-report") {
     return (
-      <div className="min-h-screen bg-background">
-        <Toaster richColors position="top-center" />
+      <AppShell
+        activeModule={activeModule}
+        dashboardLine={dashboardLine}
+        user={authUser}
+        onNavigate={setActiveModule}
+        onOpenHistory={openHistory}
+      >
+        <ModulePageHeader
+          icon={<TableProperties className="h-5 w-5" />}
+          label="Report tool"
+          title="Daily Report"
+          description="Two Excel files only. No PDF upload is required."
+        />
 
-        <header className="border-b border-primary/25 bg-[var(--header-surface)]">
-          <div className="mx-auto flex max-w-[1720px] flex-col gap-5 px-5 py-5 sm:px-8 lg:flex-row lg:items-center lg:justify-between lg:px-10">
-            <div className="flex items-center gap-3">
-              <BrandMark icon={<TableProperties className="h-5 w-5" />} />
-              <div>
-                <h1 className="text-2xl font-bold text-[var(--header-foreground)]">Daily Report</h1>
-                <ModulePill label="Current Module: Daily Report" />
-                <p className="text-sm text-[var(--header-muted)]">
-                  Two Excel files only. No PDF upload is required.
-                </p>
-              </div>
-            </div>
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center lg:ml-auto">
-              <Button
-                size="sm"
-                onClick={() => setActiveModule(null)}
-                className="self-start border border-white/70 bg-white text-primary shadow-sm hover:bg-white/90"
-              >
-                <ArrowLeft className="mr-2 h-4 w-4" />
-                Back
-              </Button>
-              {accountControls}
-            </div>
-          </div>
-        </header>
-
-        <main className="mx-auto grid max-w-[1720px] gap-6 px-5 py-8 sm:px-8 lg:grid-cols-[minmax(0,1fr)_360px] lg:px-10">
+        <main className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
           <div className="space-y-6">
             <div className="grid gap-4 md:grid-cols-2">
               <UploadCard
@@ -1165,44 +1130,27 @@ function HomePage() {
             </Card>
           </aside>
         </main>
-      </div>
+      </AppShell>
     );
   }
 
   if (activeModule === "doctor-coverage") {
     return (
-      <div className="min-h-screen bg-background">
-        <Toaster richColors position="top-center" />
+      <AppShell
+        activeModule={activeModule}
+        dashboardLine={dashboardLine}
+        user={authUser}
+        onNavigate={setActiveModule}
+        onOpenHistory={openHistory}
+      >
+        <ModulePageHeader
+          icon={<BarChart3 className="h-5 w-5" />}
+          label="Report tool"
+          title="Doctor Coverage"
+          description="Add coverage columns to a sample employee file."
+        />
 
-        <header className="border-b border-primary/25 bg-[var(--header-surface)]">
-          <div className="mx-auto flex max-w-[1720px] flex-col gap-5 px-5 py-5 sm:px-8 lg:flex-row lg:items-center lg:justify-between lg:px-10">
-            <div className="flex items-center gap-3">
-              <BrandMark icon={<BarChart3 className="h-5 w-5" />} />
-              <div>
-                <h1 className="text-2xl font-bold text-[var(--header-foreground)]">
-                  Doctor Coverage
-                </h1>
-                <ModulePill label="Current Module: Doctor Coverage" />
-                <p className="text-sm text-[var(--header-muted)]">
-                  Add coverage columns to a sample employee file.
-                </p>
-              </div>
-            </div>
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center lg:ml-auto">
-              <Button
-                size="sm"
-                onClick={() => setActiveModule(null)}
-                className="self-start border border-white/70 bg-white text-primary shadow-sm hover:bg-white/90"
-              >
-                <ArrowLeft className="mr-2 h-4 w-4" />
-                Back
-              </Button>
-              {accountControls}
-            </div>
-          </div>
-        </header>
-
-        <main className="mx-auto grid max-w-[1720px] gap-6 px-5 py-8 sm:px-8 lg:grid-cols-[minmax(0,1fr)_360px] lg:px-10">
+        <main className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
           <div className="space-y-6">
             <div className="grid gap-4 md:grid-cols-2">
               <UploadCard
@@ -1433,44 +1381,27 @@ function HomePage() {
             </Card>
           </aside>
         </main>
-      </div>
+      </AppShell>
     );
   }
 
   if (activeModule === "monthly-planned") {
     return (
-      <div className="min-h-screen bg-background">
-        <Toaster richColors position="top-center" />
+      <AppShell
+        activeModule={activeModule}
+        dashboardLine={dashboardLine}
+        user={authUser}
+        onNavigate={setActiveModule}
+        onOpenHistory={openHistory}
+      >
+        <ModulePageHeader
+          icon={<CalendarDays className="h-5 w-5" />}
+          label="Report tool"
+          title="Monthly Planned Unplanned"
+          description="Monthly call log summary by employee."
+        />
 
-        <header className="border-b border-primary/25 bg-[var(--header-surface)]">
-          <div className="mx-auto flex max-w-[1720px] flex-col gap-5 px-5 py-5 sm:px-8 lg:flex-row lg:items-center lg:justify-between lg:px-10">
-            <div className="flex items-center gap-3">
-              <BrandMark icon={<CalendarDays className="h-5 w-5" />} />
-              <div>
-                <h1 className="text-2xl font-bold text-[var(--header-foreground)]">
-                  Monthly Planned Unplanned
-                </h1>
-                <ModulePill label="Current Module: Monthly Planned Unplanned" />
-                <p className="text-sm text-[var(--header-muted)]">
-                  Monthly call log summary by employee.
-                </p>
-              </div>
-            </div>
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center lg:ml-auto">
-              <Button
-                size="sm"
-                onClick={() => setActiveModule(null)}
-                className="self-start border border-white/70 bg-white text-primary shadow-sm hover:bg-white/90"
-              >
-                <ArrowLeft className="mr-2 h-4 w-4" />
-                Back
-              </Button>
-              {accountControls}
-            </div>
-          </div>
-        </header>
-
-        <main className="mx-auto grid max-w-[1720px] gap-6 px-5 py-8 sm:px-8 lg:grid-cols-[minmax(0,1fr)_360px] lg:px-10">
+        <main className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
           <div className="space-y-6">
             <div className="grid gap-4 md:grid-cols-2">
               <UploadCard
@@ -1708,40 +1639,27 @@ function HomePage() {
             </Card>
           </aside>
         </main>
-      </div>
+      </AppShell>
     );
   }
 
   if (activeModule === "history") {
     return (
-      <div className="min-h-screen bg-background">
-        <Toaster richColors position="top-center" />
+      <AppShell
+        activeModule={activeModule}
+        dashboardLine={dashboardLine}
+        user={authUser}
+        onNavigate={setActiveModule}
+        onOpenHistory={openHistory}
+      >
+        <ModulePageHeader
+          icon={<HistoryIcon className="h-5 w-5" />}
+          label="Archive"
+          title="History"
+          description="Saved report files, previews, and downloads."
+        />
 
-        <header className="border-b border-primary/25 bg-[var(--header-surface)]">
-          <div className="mx-auto flex max-w-[1720px] flex-col gap-5 px-5 py-5 sm:px-8 lg:flex-row lg:items-center lg:justify-between lg:px-10">
-            <div className="flex items-center gap-3">
-              <BrandMark icon={<HistoryIcon className="h-5 w-5" />} />
-              <div>
-                <h1 className="text-2xl font-bold text-[var(--header-foreground)]">History</h1>
-                <ModulePill label="Current Module: History" />
-                <p className="text-sm text-[var(--header-muted)]">Saved monthly report files</p>
-              </div>
-            </div>
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center lg:ml-auto">
-              <Button
-                size="sm"
-                onClick={() => setActiveModule(null)}
-                className="self-start border border-white/70 bg-white text-primary shadow-sm hover:bg-white/90"
-              >
-                <ArrowLeft className="mr-2 h-4 w-4" />
-                Back
-              </Button>
-              {accountControls}
-            </div>
-          </div>
-        </header>
-
-        <main className="mx-auto max-w-[1720px] px-5 py-8 sm:px-8 lg:px-10">
+        <main>
           <Card className="border-border bg-card p-5 shadow-[var(--shadow-soft)]">
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
@@ -1847,41 +1765,26 @@ function HomePage() {
             </Card>
           )}
         </main>
-      </div>
+      </AppShell>
     );
   }
 
   return (
-    <div className="min-h-screen bg-background">
-      <Toaster richColors position="top-center" />
+    <AppShell
+      activeModule="monthly-report"
+      dashboardLine={dashboardLine}
+      user={authUser}
+      onNavigate={setActiveModule}
+      onOpenHistory={openHistory}
+    >
+      <ModulePageHeader
+        icon={<FileSpreadsheet className="h-5 w-5" />}
+        label="Report tool"
+        title="Monthly Report"
+        description="PDF to Excel report workbench."
+      />
 
-      <header className="border-b border-primary/25 bg-[var(--header-surface)]">
-        <div className="mx-auto flex max-w-[1720px] flex-col gap-5 px-5 py-5 sm:px-8 lg:flex-row lg:items-center lg:justify-between lg:px-10">
-          <div className="flex items-center gap-3">
-            <BrandMark icon={<FileSpreadsheet className="h-5 w-5" />} />
-            <div>
-              <h1 className="text-2xl font-bold text-[var(--header-foreground)]">
-                neutropharmacallsummry.com
-              </h1>
-              <ModulePill label="Current Module: Monthly Report" />
-              <p className="text-sm text-[var(--header-muted)]">PDF to Excel report workbench</p>
-            </div>
-          </div>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center lg:ml-auto">
-            <Button
-              size="sm"
-              onClick={() => setActiveModule(null)}
-              className="self-start border border-white/70 bg-white text-primary shadow-sm hover:bg-white/90"
-            >
-              <ArrowLeft className="mr-2 h-4 w-4" />
-              Back
-            </Button>
-            {accountControls}
-          </div>
-        </div>
-      </header>
-
-      <main className="mx-auto grid max-w-[1720px] gap-6 px-5 py-8 sm:px-8 lg:grid-cols-[minmax(0,1fr)_360px] lg:px-10">
+      <main className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
         <div className="space-y-6">
           <div className="grid gap-4 md:grid-cols-2">
             <UploadCard
@@ -2249,15 +2152,534 @@ function HomePage() {
           </Card>
         )}
       </main>
+    </AppShell>
+  );
+}
+
+function AppShell({
+  activeModule,
+  dashboardLine,
+  user,
+  onNavigate,
+  onOpenHistory,
+  children,
+}: {
+  activeModule: ActiveModule;
+  dashboardLine: string;
+  user: User;
+  onNavigate: (module: ActiveModule) => void;
+  onOpenHistory: () => void;
+  children: React.ReactNode;
+}) {
+  const tools = [
+    {
+      id: "daily-report" as const,
+      label: "Daily Report",
+      icon: <TableProperties className="h-4 w-4" />,
+      description: "Call log",
+    },
+    {
+      id: "monthly-report" as const,
+      label: "Monthly Report",
+      icon: <FileSpreadsheet className="h-4 w-4" />,
+      description: "PDF sync",
+    },
+    {
+      id: "doctor-coverage" as const,
+      label: "Doctor Coverage",
+      icon: <BarChart3 className="h-4 w-4" />,
+      description: "Coverage %",
+    },
+    {
+      id: "monthly-planned" as const,
+      label: "Planned Summary",
+      icon: <CalendarDays className="h-4 w-4" />,
+      description: "Averages",
+    },
+  ];
+
+  return (
+    <div className="min-h-screen bg-background text-foreground">
+      <Toaster richColors position="top-center" />
+      <aside className="neuro-sidebar fixed inset-x-3 top-3 z-40 flex h-auto flex-col rounded-2xl p-3 lg:inset-y-4 lg:left-4 lg:right-auto lg:w-72">
+        <button
+          type="button"
+          onClick={() => onNavigate(null)}
+          className="neuro-brand flex w-full items-center gap-3 rounded-xl p-3 text-left transition"
+        >
+          <BrandMark icon={<Activity className="h-5 w-5" />} />
+          <div className="min-w-0">
+            <div className="truncate text-base font-bold text-foreground">{APP_NAME}</div>
+            <div className="truncate text-xs text-muted-foreground">{dashboardLine}</div>
+          </div>
+        </button>
+
+        <nav className="mt-3 grid grid-cols-3 gap-2 lg:flex lg:flex-1 lg:flex-col">
+          <SidebarButton
+            active={!activeModule}
+            icon={<Home className="h-4 w-4" />}
+            label="Dashboard"
+            description="Overview"
+            onClick={() => onNavigate(null)}
+          />
+          {tools.map((tool) => (
+            <SidebarButton
+              key={tool.id}
+              active={activeModule === tool.id}
+              icon={tool.icon}
+              label={tool.label}
+              description={tool.description}
+              onClick={() => onNavigate(tool.id)}
+            />
+          ))}
+          <SidebarButton
+            active={activeModule === "history"}
+            icon={<HistoryIcon className="h-4 w-4" />}
+            label="History"
+            description="Files"
+            onClick={onOpenHistory}
+          />
+        </nav>
+
+        <button
+          type="button"
+          onClick={() => onNavigate("profile")}
+          className={`neuro-user mt-3 flex items-center gap-3 rounded-xl p-3 text-left transition ${
+            activeModule === "profile" ? "is-active" : ""
+          }`}
+        >
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-[var(--shadow-soft)]">
+            <UserCircle className="h-5 w-5" />
+          </span>
+          <span className="hidden min-w-0 lg:block">
+            <span className="block truncate text-sm font-semibold text-foreground">
+              {user.email ?? "Profile"}
+            </span>
+            <span className="block text-xs text-muted-foreground">Profile & theme</span>
+          </span>
+        </button>
+      </aside>
+
+      <div className="px-4 pb-8 pt-40 sm:px-6 lg:ml-80 lg:px-8 lg:pt-8">
+        <div className="mx-auto max-w-[1540px] animate-in fade-in slide-in-from-bottom-2 duration-500">
+          {children}
+        </div>
+      </div>
     </div>
   );
 }
 
-function AuthLoadingScreen({
+function SidebarButton({
+  active,
+  icon,
+  label,
+  description,
+  onClick,
+}: {
+  active: boolean;
+  icon: React.ReactNode;
+  label: string;
+  description: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`neuro-nav-item group flex min-h-14 items-center gap-3 rounded-xl px-3 py-2 text-left transition ${
+        active ? "is-active" : ""
+      }`}
+    >
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-primary transition group-hover:scale-105">
+        {icon}
+      </span>
+      <span className="hidden min-w-0 lg:block">
+        <span className="block truncate text-sm font-semibold">{label}</span>
+        <span className="block truncate text-xs text-muted-foreground">{description}</span>
+      </span>
+    </button>
+  );
+}
+
+function ModulePageHeader({
+  icon,
+  label,
+  title,
+  description,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  title: string;
+  description: string;
+}) {
+  return (
+    <section className="neuro-panel mb-6 p-5">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-4">
+          <BrandMark icon={icon} />
+          <div>
+            <div className="text-xs font-bold uppercase tracking-wide text-primary">{label}</div>
+            <h1 className="mt-1 text-2xl font-bold text-foreground">{title}</h1>
+            <p className="text-sm text-muted-foreground">{description}</p>
+          </div>
+        </div>
+        <ModulePill label="Ready workspace" />
+      </div>
+    </section>
+  );
+}
+
+function DashboardHome({
+  historyItems,
+  historyLoading,
+  onNavigate,
+  onOpenHistory,
+}: {
+  historyItems: ReportHistoryItem[];
+  historyLoading: boolean;
+  onNavigate: (module: ActiveModule) => void;
+  onOpenHistory: () => void;
+}) {
+  const latestItems = historyItems.slice(0, 5);
+  const totalReports = historyItems.length;
+  const totalFiles = historyItems.reduce((sum, item) => sum + Math.max(item.pdfCount, 1), 0);
+  const totalEmployees = historyItems.reduce((sum, item) => sum + item.totalEmployees, 0);
+  const totalMatched = historyItems.reduce((sum, item) => sum + item.matchedEmployees, 0);
+  const matchRate = totalEmployees ? Math.round((totalMatched / totalEmployees) * 100) : 0;
+  const totalSize = historyItems.reduce((sum, item) => sum + item.size, 0);
+  const reportMix = buildReportMix(historyItems);
+
+  return (
+    <main className="space-y-6">
+      <section className="neuro-hero p-6">
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
+          <div>
+            <div className="text-xs font-bold uppercase tracking-wide text-primary">
+              Admin dashboard
+            </div>
+            <h1 className="mt-2 text-3xl font-bold text-foreground sm:text-4xl">{APP_NAME}</h1>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">
+              Monitor report activity, open tools from the sidebar, and keep generated files moving
+              through a cleaner reporting workflow.
+            </p>
+            <div className="mt-5 flex flex-wrap gap-3">
+              <Button onClick={() => onNavigate("monthly-report")} className="neuro-button">
+                <Zap className="mr-2 h-4 w-4" />
+                Start monthly report
+              </Button>
+              <Button variant="outline" onClick={onOpenHistory} className="neuro-button-muted">
+                <HistoryIcon className="mr-2 h-4 w-4" />
+                View history
+              </Button>
+            </div>
+          </div>
+          <div className="neuro-inset flex min-h-48 items-center justify-center p-5">
+            <CircularProgress value={matchRate} label="Match rate" />
+          </div>
+        </div>
+      </section>
+
+      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <DashboardMetric
+          icon={<FileText className="h-5 w-5" />}
+          label="Saved reports"
+          value={totalReports}
+          hint={historyLoading ? "Refreshing..." : "History entries"}
+        />
+        <DashboardMetric
+          icon={<Users className="h-5 w-5" />}
+          label="Matched employees"
+          value={totalMatched}
+          hint={`${totalEmployees || 0} total rows`}
+        />
+        <DashboardMetric
+          icon={<Database className="h-5 w-5" />}
+          label="Files handled"
+          value={totalFiles}
+          hint={formatBytes(totalSize)}
+        />
+        <DashboardMetric
+          icon={<TrendingUp className="h-5 w-5" />}
+          label="Quality score"
+          value={`${matchRate}%`}
+          hint="Across saved reports"
+        />
+      </section>
+
+      <section className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
+        <div className="neuro-panel p-5">
+          <div className="mb-5 flex items-center justify-between">
+            <div>
+              <div className="text-xs font-bold uppercase tracking-wide text-primary">Activity</div>
+              <h2 className="text-lg font-semibold text-foreground">Recent report flow</h2>
+            </div>
+            <LineChart className="h-5 w-5 text-primary" />
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {[
+              { label: "Daily Report", value: 72 },
+              { label: "Monthly Report", value: 88 },
+              { label: "Doctor Coverage", value: 64 },
+              { label: "Planned Summary", value: 78 },
+            ].map((item) => (
+              <div key={item.label} className="neuro-inset p-4">
+                <div className="mb-3 flex items-center justify-between text-sm">
+                  <span className="font-semibold text-foreground">{item.label}</span>
+                  <span className="text-muted-foreground">{item.value}%</span>
+                </div>
+                <div className="h-3 overflow-hidden rounded-full bg-background shadow-[var(--shadow-inset-sm)]">
+                  <div
+                    className="h-full rounded-full bg-primary transition-all duration-700"
+                    style={{ width: `${item.value}%` }}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="neuro-panel p-5">
+          <div className="mb-5 flex items-center justify-between">
+            <div>
+              <div className="text-xs font-bold uppercase tracking-wide text-primary">Mix</div>
+              <h2 className="text-lg font-semibold text-foreground">Report categories</h2>
+            </div>
+            <PieChart className="h-5 w-5 text-primary" />
+          </div>
+          <div className="space-y-3">
+            {reportMix.map((item) => (
+              <div key={item.label} className="flex items-center gap-3">
+                <span className="h-3 w-3 rounded-full" style={{ backgroundColor: item.color }} />
+                <span className="min-w-0 flex-1 text-sm font-medium text-foreground">
+                  {item.label}
+                </span>
+                <span className="text-sm text-muted-foreground">{item.value}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="neuro-panel p-5">
+        <div className="mb-5 flex items-center justify-between">
+          <div>
+            <div className="text-xs font-bold uppercase tracking-wide text-primary">Logs</div>
+            <h2 className="text-lg font-semibold text-foreground">Latest saved reports</h2>
+          </div>
+          <Clock3 className="h-5 w-5 text-primary" />
+        </div>
+        {latestItems.length ? (
+          <div className="grid gap-3">
+            {latestItems.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={onOpenHistory}
+                className="neuro-list-row grid gap-3 rounded-xl p-4 text-left transition md:grid-cols-[minmax(0,1fr)_140px_120px]"
+              >
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold text-foreground">
+                    {item.fileName}
+                  </div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    {formatHistoryDate(item.createdAt)}
+                  </div>
+                </div>
+                <div className="text-sm text-muted-foreground">{item.reportType ?? "Report"}</div>
+                <div className="text-sm font-semibold text-primary">
+                  {item.matchedEmployees}/{item.totalEmployees}
+                </div>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="neuro-inset p-5 text-sm text-muted-foreground">
+            No generated reports yet. Start with Monthly Report or Daily Report from the sidebar.
+          </div>
+        )}
+      </section>
+    </main>
+  );
+}
+
+function ProfilePage({
+  user,
   color,
   mode,
+  signingOut,
   onChange,
   onToggleMode,
+  onSignOut,
+}: {
+  user: User;
+  color: string;
+  mode: "light" | "dark";
+  signingOut: boolean;
+  onChange: (color: string) => void;
+  onToggleMode: () => void;
+  onSignOut: () => void;
+}) {
+  return (
+    <main className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <section className="neuro-panel p-6">
+        <div className="flex items-center gap-4">
+          <BrandMark icon={<UserCircle className="h-5 w-5" />} />
+          <div>
+            <div className="text-xs font-bold uppercase tracking-wide text-primary">
+              User profile
+            </div>
+            <h1 className="mt-1 text-2xl font-bold text-foreground">{user.email ?? "Account"}</h1>
+            <p className="text-sm text-muted-foreground">
+              Account controls and interface settings.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-8 grid gap-4 sm:grid-cols-2">
+          <div className="neuro-inset p-4">
+            <div className="text-xs font-bold uppercase tracking-wide text-primary">Email</div>
+            <div className="mt-2 truncate text-sm font-semibold text-foreground">
+              {user.email ?? "Signed in"}
+            </div>
+          </div>
+          <div className="neuro-inset p-4">
+            <div className="text-xs font-bold uppercase tracking-wide text-primary">Theme</div>
+            <div className="mt-2 text-sm font-semibold text-foreground">
+              {mode === "dark" ? "Dark mode" : "Light mode"}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <aside className="space-y-6">
+        <section className="neuro-panel p-5">
+          <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-foreground">
+            <Settings className="h-4 w-4 text-primary" />
+            Interface
+          </div>
+          <Button type="button" onClick={onToggleMode} className="neuro-button mb-4 w-full">
+            {mode === "dark" ? <Sun className="mr-2 h-4 w-4" /> : <Moon className="mr-2 h-4 w-4" />}
+            {mode === "dark" ? "Use light theme" : "Use dark theme"}
+          </Button>
+          <div className="grid grid-cols-5 gap-2">
+            {THEME_COLORS.map((item) => (
+              <button
+                key={item}
+                type="button"
+                className={`h-9 rounded-lg transition hover:scale-105 ${
+                  color.toLowerCase() === item.toLowerCase() ? "ring-2 ring-primary" : ""
+                }`}
+                style={{ backgroundColor: item }}
+                onClick={() => onChange(item)}
+                aria-label={`Use color ${item}`}
+              />
+            ))}
+          </div>
+          <input
+            type="color"
+            value={color}
+            onChange={(event) => onChange(event.target.value)}
+            className="mt-4 h-10 w-full cursor-pointer rounded-xl border border-border bg-background p-1 shadow-[var(--shadow-inset)]"
+            aria-label="Choose custom theme color"
+          />
+        </section>
+
+        <section className="neuro-panel p-5">
+          <Button
+            type="button"
+            onClick={onSignOut}
+            disabled={signingOut}
+            variant="outline"
+            className="neuro-button-muted w-full"
+          >
+            {signingOut ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <LogOut className="mr-2 h-4 w-4" />
+            )}
+            Sign out
+          </Button>
+        </section>
+      </aside>
+    </main>
+  );
+}
+
+function DashboardMetric({
+  icon,
+  label,
+  value,
+  hint,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: number | string;
+  hint: string;
+}) {
+  return (
+    <div className="neuro-panel p-5 transition hover:-translate-y-0.5">
+      <div className="mb-4 flex items-center justify-between">
+        <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-[var(--shadow-soft)]">
+          {icon}
+        </span>
+        <Activity className="h-4 w-4 text-primary/70" />
+      </div>
+      <div className="text-2xl font-bold text-foreground">{value}</div>
+      <div className="mt-1 text-sm font-semibold text-foreground">{label}</div>
+      <div className="mt-1 text-xs text-muted-foreground">{hint}</div>
+    </div>
+  );
+}
+
+function CircularProgress({ value, label }: { value: number; label: string }) {
+  const clamped = Math.max(0, Math.min(100, value));
+  return (
+    <div className="relative flex h-40 w-40 items-center justify-center rounded-full shadow-[var(--shadow-elegant)]">
+      <div
+        className="absolute inset-0 rounded-full"
+        style={{
+          background: `conic-gradient(var(--primary) ${clamped}%, color-mix(in srgb, var(--muted) 75%, transparent) 0)`,
+        }}
+      />
+      <div className="absolute inset-4 rounded-full bg-card shadow-[var(--shadow-inset)]" />
+      <div className="relative text-center">
+        <div className="text-3xl font-bold text-foreground">{clamped}%</div>
+        <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          {label}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function buildReportMix(items: ReportHistoryItem[]) {
+  const colors = ["#0b6f6a", "#2563eb", "#db2777", "#ca8a04"];
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    const key = item.reportType ?? "Report";
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const entries = [...counts.entries()];
+  if (!entries.length) {
+    return [
+      { label: "Monthly Report", value: 0, color: colors[0] },
+      { label: "Daily Report", value: 0, color: colors[1] },
+      { label: "Doctor Coverage", value: 0, color: colors[2] },
+      { label: "Planned Summary", value: 0, color: colors[3] },
+    ];
+  }
+  return entries.map(([label, value], index) => ({
+    label,
+    value,
+    color: colors[index % colors.length],
+  }));
+}
+
+function AuthLoadingScreen({
+  color: _color,
+  mode: _mode,
+  onChange: _onChange,
+  onToggleMode: _onToggleMode,
 }: {
   color: string;
   mode: "light" | "dark";
@@ -2267,9 +2689,8 @@ function AuthLoadingScreen({
   return (
     <div className="min-h-screen bg-background">
       <Toaster richColors position="top-center" />
-      <ThemeCustomizer color={color} mode={mode} onChange={onChange} onToggleMode={onToggleMode} />
       <main className="flex min-h-screen items-center justify-center px-5">
-        <div className="flex items-center gap-3 rounded-md border border-border bg-card px-5 py-4 text-sm font-medium text-foreground shadow-[var(--shadow-soft)]">
+        <div className="neuro-panel flex items-center gap-3 px-5 py-4 text-sm font-medium text-foreground">
           <Loader2 className="h-4 w-4 animate-spin text-primary" />
           Checking login session...
         </div>
@@ -2279,10 +2700,10 @@ function AuthLoadingScreen({
 }
 
 function AuthScreen({
-  color,
-  mode,
-  onChange,
-  onToggleMode,
+  color: _color,
+  mode: _mode,
+  onChange: _onChange,
+  onToggleMode: _onToggleMode,
 }: {
   color: string;
   mode: "light" | "dark";
@@ -2333,18 +2754,17 @@ function AuthScreen({
   return (
     <div className="min-h-screen bg-background">
       <Toaster richColors position="top-center" />
-      <ThemeCustomizer color={color} mode={mode} onChange={onChange} onToggleMode={onToggleMode} />
       <main className="mx-auto flex min-h-screen max-w-[1720px] items-center justify-center px-5 py-14 sm:px-8">
-        <Card className="w-full max-w-md border-border bg-card p-6 shadow-[var(--shadow-elegant)]">
+        <Card className="neuro-panel w-full max-w-md border-border bg-card p-6">
           <div className="mb-6 flex items-center gap-3">
             <BrandMark icon={<ShieldCheck className="h-5 w-5" />} />
             <div>
-              <h1 className="text-xl font-bold text-foreground">neutropharmacallsummry.com</h1>
+              <h1 className="text-xl font-bold text-foreground">{APP_NAME}</h1>
               <p className="text-sm text-muted-foreground">Sign in to continue</p>
             </div>
           </div>
 
-          <div className="mb-5 grid grid-cols-2 rounded-md border border-border bg-muted/30 p-1">
+          <div className="neuro-inset mb-5 grid grid-cols-2 p-1">
             <button
               type="button"
               onClick={() => setAuthMode("login")}
@@ -2368,7 +2788,7 @@ function AuthScreen({
           <form className="space-y-4" onSubmit={submitAuth}>
             <label className="block text-sm font-medium text-foreground">
               Email
-              <span className="mt-1 flex items-center gap-2 rounded-md border border-input bg-background px-3 py-2 shadow-[var(--shadow-inset)]">
+              <span className="neuro-inset mt-1 flex items-center gap-2 px-3 py-2">
                 <Mail className="h-4 w-4 shrink-0 text-primary" />
                 <input
                   value={email}
@@ -2384,7 +2804,7 @@ function AuthScreen({
 
             <label className="block text-sm font-medium text-foreground">
               Password
-              <span className="mt-1 flex items-center gap-2 rounded-md border border-input bg-background px-3 py-2 shadow-[var(--shadow-inset)]">
+              <span className="neuro-inset mt-1 flex items-center gap-2 px-3 py-2">
                 <Lock className="h-4 w-4 shrink-0 text-primary" />
                 <input
                   value={password}
@@ -2399,11 +2819,7 @@ function AuthScreen({
               </span>
             </label>
 
-            <Button
-              type="submit"
-              className="h-11 w-full shadow-[var(--shadow-soft)]"
-              disabled={submitting}
-            >
+            <Button type="submit" className="neuro-button h-11 w-full" disabled={submitting}>
               {submitting ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : isSignup ? (
