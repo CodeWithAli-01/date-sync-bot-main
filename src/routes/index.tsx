@@ -23,12 +23,18 @@ import {
   ShieldCheck,
   TableProperties,
   Trash2,
+  Lock,
+  LogOut,
+  Mail,
+  UserPlus,
 } from "lucide-react";
+import type { User } from "@supabase/supabase-js";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
+import { supabase } from "@/integrations/supabase/client";
 import { parsePdf, type PdfParseResult } from "@/lib/pdf-extractor";
 import { processExcel, type ProcessReport } from "@/lib/excel-processor";
 import { processDailyReport, type DailyReportResult } from "@/lib/daily-report-processor";
@@ -117,6 +123,9 @@ export const Route = createFileRoute("/")({
 });
 
 function HomePage() {
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authUser, setAuthUser] = useState<User | null>(null);
+  const [signingOut, setSigningOut] = useState(false);
   const [activeModule, setActiveModule] = useState<ActiveModule>(null);
   const [dashboardLine, setDashboardLine] = useState(DASHBOARD_LINES[0]);
   const [themeColor, setThemeColor] = useState(DEFAULT_THEME_COLOR);
@@ -190,6 +199,32 @@ function HomePage() {
     applyThemeMode(savedMode);
   }, []);
 
+  useEffect(() => {
+    let mounted = true;
+
+    void supabase.auth.getSession().then(({ data, error }) => {
+      if (!mounted) return;
+      if (error) {
+        console.error("Supabase session load failed", error);
+        toast.error("Unable to check your login session.");
+      }
+      setAuthUser(data.session?.user ?? null);
+      setAuthLoading(false);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setAuthUser(session?.user ?? null);
+      setAuthLoading(false);
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
   const updateThemeColor = (color: string) => {
     setThemeColor(color);
     applyThemeColor(color);
@@ -202,6 +237,21 @@ function HomePage() {
     applyThemeMode(next);
     window.localStorage.setItem("site-theme-mode", next);
   };
+
+  const signOut = useCallback(async () => {
+    setSigningOut(true);
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) throw error;
+      setActiveModule(null);
+      toast.success("Signed out.");
+    } catch (error) {
+      console.error("Sign out failed", error);
+      toast.error(error instanceof Error ? error.message : "Unable to sign out.");
+    } finally {
+      setSigningOut(false);
+    }
+  }, []);
 
   const onExcelChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -247,9 +297,7 @@ function HomePage() {
   };
 
   const sortedDates = useMemo(() => {
-    const ds = pdfFiles
-      .map((f) => extractDateFromPdfName(f.name))
-      .filter((x): x is string => !!x);
+    const ds = pdfFiles.map((f) => extractDateFromPdfName(f.name)).filter((x): x is string => !!x);
     return [...new Set(ds)].sort();
   }, [pdfFiles]);
   const canProcess = Boolean(excelFile) && pdfFiles.length > 0 && !processing;
@@ -556,7 +604,9 @@ function HomePage() {
         blob: result.blob,
       });
       if (result.warnings.length) toast.warning(result.warnings[0]);
-      toast.success(`Doctor coverage report ready. ${result.matchedEmployees} employee(s) matched.`);
+      toast.success(
+        `Doctor coverage report ready. ${result.matchedEmployees} employee(s) matched.`,
+      );
     } catch (error) {
       console.error("Doctor coverage report failed", error);
       toast.error(
@@ -764,6 +814,32 @@ function HomePage() {
     setPreviewDirty(true);
   };
 
+  if (authLoading) {
+    return (
+      <AuthLoadingScreen
+        color={themeColor}
+        mode={themeMode}
+        onChange={updateThemeColor}
+        onToggleMode={toggleThemeMode}
+      />
+    );
+  }
+
+  if (!authUser) {
+    return (
+      <AuthScreen
+        color={themeColor}
+        mode={themeMode}
+        onChange={updateThemeColor}
+        onToggleMode={toggleThemeMode}
+      />
+    );
+  }
+
+  const accountControls = (
+    <AccountControls user={authUser} signingOut={signingOut} onSignOut={signOut} />
+  );
+
   if (!activeModule) {
     return (
       <div className="min-h-screen bg-background">
@@ -776,7 +852,7 @@ function HomePage() {
         />
 
         <header className="border-b border-primary/25 bg-[var(--header-surface)]">
-          <div className="flex w-full flex-col gap-2 px-5 py-4 sm:px-6 lg:pr-72">
+          <div className="flex w-full flex-col gap-4 px-5 py-4 sm:px-6 md:flex-row md:items-center md:justify-between lg:pr-72">
             <div className="flex items-center gap-3">
               <BrandMark icon={<TableProperties className="h-5 w-5" />} />
               <div>
@@ -786,14 +862,13 @@ function HomePage() {
                 <p className="text-sm font-medium text-[var(--header-muted)]">{dashboardLine}</p>
               </div>
             </div>
+            {accountControls}
           </div>
         </header>
 
         <main className="mx-auto min-h-[calc(100vh-92px)] max-w-[1720px] px-5 py-7 sm:px-8 lg:px-10">
           <div className="mb-5">
-            <div className="text-xs font-bold uppercase tracking-wide text-primary">
-              Workspace
-            </div>
+            <div className="text-xs font-bold uppercase tracking-wide text-primary">Workspace</div>
             <h2 className="mt-1 text-lg font-semibold text-foreground">Dashboard</h2>
           </div>
 
@@ -852,14 +927,17 @@ function HomePage() {
                 </p>
               </div>
             </div>
-            <Button
-              size="sm"
-              onClick={() => setActiveModule(null)}
-              className="self-start border border-white/70 bg-white text-primary shadow-sm hover:bg-white/90 lg:ml-auto"
-            >
-              <ArrowLeft className="mr-2 h-4 w-4" />
-              Back
-            </Button>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center lg:ml-auto">
+              <Button
+                size="sm"
+                onClick={() => setActiveModule(null)}
+                className="self-start border border-white/70 bg-white text-primary shadow-sm hover:bg-white/90"
+              >
+                <ArrowLeft className="mr-2 h-4 w-4" />
+                Back
+              </Button>
+              {accountControls}
+            </div>
           </div>
         </header>
 
@@ -938,7 +1016,10 @@ function HomePage() {
                     color="accent"
                   />
                 ) : (
-                  <EmptyHint icon={<FileSpreadsheet className="h-5 w-5" />} label="Choose call log" />
+                  <EmptyHint
+                    icon={<FileSpreadsheet className="h-5 w-5" />}
+                    label="Choose call log"
+                  />
                 )}
               </UploadCard>
             </div>
@@ -1107,14 +1188,17 @@ function HomePage() {
                 </p>
               </div>
             </div>
-            <Button
-              size="sm"
-              onClick={() => setActiveModule(null)}
-              className="self-start border border-white/70 bg-white text-primary shadow-sm hover:bg-white/90 lg:ml-auto"
-            >
-              <ArrowLeft className="mr-2 h-4 w-4" />
-              Back
-            </Button>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center lg:ml-auto">
+              <Button
+                size="sm"
+                onClick={() => setActiveModule(null)}
+                className="self-start border border-white/70 bg-white text-primary shadow-sm hover:bg-white/90"
+              >
+                <ArrowLeft className="mr-2 h-4 w-4" />
+                Back
+              </Button>
+              {accountControls}
+            </div>
           </div>
         </header>
 
@@ -1248,8 +1332,8 @@ function HomePage() {
                         Doctor coverage report ready
                       </h3>
                       <p className="text-sm text-muted-foreground">
-                        {coverageReport.matchedEmployees}/{coverageReport.totalEmployees} employee(s)
-                        matched from the sample file.
+                        {coverageReport.matchedEmployees}/{coverageReport.totalEmployees}{" "}
+                        employee(s) matched from the sample file.
                       </p>
                     </div>
                   </div>
@@ -1372,14 +1456,17 @@ function HomePage() {
                 </p>
               </div>
             </div>
-            <Button
-              size="sm"
-              onClick={() => setActiveModule(null)}
-              className="self-start border border-white/70 bg-white text-primary shadow-sm hover:bg-white/90 lg:ml-auto"
-            >
-              <ArrowLeft className="mr-2 h-4 w-4" />
-              Back
-            </Button>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center lg:ml-auto">
+              <Button
+                size="sm"
+                onClick={() => setActiveModule(null)}
+                className="self-start border border-white/70 bg-white text-primary shadow-sm hover:bg-white/90"
+              >
+                <ArrowLeft className="mr-2 h-4 w-4" />
+                Back
+              </Button>
+              {accountControls}
+            </div>
           </div>
         </header>
 
@@ -1615,8 +1702,8 @@ function HomePage() {
             <Card className="border-border bg-card p-5 shadow-[var(--shadow-soft)]">
               <div className="text-xs font-bold uppercase text-primary">Columns added</div>
               <p className="mt-2 text-sm text-muted-foreground">
-                Total Planned, Planned Avg, Total Unplanned, Unplanned Avg, Total Calls, Total
-                Calls Avg, and CP Avg Time.
+                Total Planned, Planned Avg, Total Unplanned, Unplanned Avg, Total Calls, Total Calls
+                Avg, and CP Avg Time.
               </p>
             </Card>
           </aside>
@@ -1640,14 +1727,17 @@ function HomePage() {
                 <p className="text-sm text-[var(--header-muted)]">Saved monthly report files</p>
               </div>
             </div>
-            <Button
-              size="sm"
-              onClick={() => setActiveModule(null)}
-              className="self-start border border-white/70 bg-white text-primary shadow-sm hover:bg-white/90 lg:ml-auto"
-            >
-              <ArrowLeft className="mr-2 h-4 w-4" />
-              Back
-            </Button>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center lg:ml-auto">
+              <Button
+                size="sm"
+                onClick={() => setActiveModule(null)}
+                className="self-start border border-white/70 bg-white text-primary shadow-sm hover:bg-white/90"
+              >
+                <ArrowLeft className="mr-2 h-4 w-4" />
+                Back
+              </Button>
+              {accountControls}
+            </div>
           </div>
         </header>
 
@@ -1777,15 +1867,16 @@ function HomePage() {
               <p className="text-sm text-[var(--header-muted)]">PDF to Excel report workbench</p>
             </div>
           </div>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center lg:ml-auto">
             <Button
               size="sm"
               onClick={() => setActiveModule(null)}
-              className="self-start border border-white/70 bg-white text-primary shadow-sm hover:bg-white/90 lg:ml-auto"
+              className="self-start border border-white/70 bg-white text-primary shadow-sm hover:bg-white/90"
             >
               <ArrowLeft className="mr-2 h-4 w-4" />
               Back
             </Button>
+            {accountControls}
           </div>
         </div>
       </header>
@@ -2158,6 +2249,204 @@ function HomePage() {
           </Card>
         )}
       </main>
+    </div>
+  );
+}
+
+function AuthLoadingScreen({
+  color,
+  mode,
+  onChange,
+  onToggleMode,
+}: {
+  color: string;
+  mode: "light" | "dark";
+  onChange: (color: string) => void;
+  onToggleMode: () => void;
+}) {
+  return (
+    <div className="min-h-screen bg-background">
+      <Toaster richColors position="top-center" />
+      <ThemeCustomizer color={color} mode={mode} onChange={onChange} onToggleMode={onToggleMode} />
+      <main className="flex min-h-screen items-center justify-center px-5">
+        <div className="flex items-center gap-3 rounded-md border border-border bg-card px-5 py-4 text-sm font-medium text-foreground shadow-[var(--shadow-soft)]">
+          <Loader2 className="h-4 w-4 animate-spin text-primary" />
+          Checking login session...
+        </div>
+      </main>
+    </div>
+  );
+}
+
+function AuthScreen({
+  color,
+  mode,
+  onChange,
+  onToggleMode,
+}: {
+  color: string;
+  mode: "light" | "dark";
+  onChange: (color: string) => void;
+  onToggleMode: () => void;
+}) {
+  const [authMode, setAuthMode] = useState<"login" | "signup">("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  const isSignup = authMode === "signup";
+
+  const submitAuth = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setSubmitting(true);
+
+    try {
+      const normalizedEmail = email.trim();
+      if (!normalizedEmail || !password) throw new Error("Enter your email and password.");
+
+      const result = isSignup
+        ? await supabase.auth.signUp({
+            email: normalizedEmail,
+            password,
+            options: { emailRedirectTo: window.location.origin },
+          })
+        : await supabase.auth.signInWithPassword({
+            email: normalizedEmail,
+            password,
+          });
+
+      if (result.error) throw result.error;
+
+      if (isSignup && !result.data.session) {
+        toast.success("Account created. Check your email to confirm your login.");
+      } else {
+        toast.success("Signed in.");
+      }
+    } catch (error) {
+      console.error("Authentication failed", error);
+      toast.error(error instanceof Error ? error.message : "Authentication failed.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-background">
+      <Toaster richColors position="top-center" />
+      <ThemeCustomizer color={color} mode={mode} onChange={onChange} onToggleMode={onToggleMode} />
+      <main className="mx-auto flex min-h-screen max-w-[1720px] items-center justify-center px-5 py-14 sm:px-8">
+        <Card className="w-full max-w-md border-border bg-card p-6 shadow-[var(--shadow-elegant)]">
+          <div className="mb-6 flex items-center gap-3">
+            <BrandMark icon={<ShieldCheck className="h-5 w-5" />} />
+            <div>
+              <h1 className="text-xl font-bold text-foreground">neutropharmacallsummry.com</h1>
+              <p className="text-sm text-muted-foreground">Sign in to continue</p>
+            </div>
+          </div>
+
+          <div className="mb-5 grid grid-cols-2 rounded-md border border-border bg-muted/30 p-1">
+            <button
+              type="button"
+              onClick={() => setAuthMode("login")}
+              className={`h-9 rounded-md text-sm font-semibold transition ${
+                !isSignup ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"
+              }`}
+            >
+              Login
+            </button>
+            <button
+              type="button"
+              onClick={() => setAuthMode("signup")}
+              className={`h-9 rounded-md text-sm font-semibold transition ${
+                isSignup ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"
+              }`}
+            >
+              Create
+            </button>
+          </div>
+
+          <form className="space-y-4" onSubmit={submitAuth}>
+            <label className="block text-sm font-medium text-foreground">
+              Email
+              <span className="mt-1 flex items-center gap-2 rounded-md border border-input bg-background px-3 py-2 shadow-[var(--shadow-inset)]">
+                <Mail className="h-4 w-4 shrink-0 text-primary" />
+                <input
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  type="email"
+                  autoComplete="email"
+                  className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none"
+                  placeholder="you@example.com"
+                  required
+                />
+              </span>
+            </label>
+
+            <label className="block text-sm font-medium text-foreground">
+              Password
+              <span className="mt-1 flex items-center gap-2 rounded-md border border-input bg-background px-3 py-2 shadow-[var(--shadow-inset)]">
+                <Lock className="h-4 w-4 shrink-0 text-primary" />
+                <input
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  type="password"
+                  autoComplete={isSignup ? "new-password" : "current-password"}
+                  minLength={6}
+                  className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none"
+                  placeholder="At least 6 characters"
+                  required
+                />
+              </span>
+            </label>
+
+            <Button
+              type="submit"
+              className="h-11 w-full shadow-[var(--shadow-soft)]"
+              disabled={submitting}
+            >
+              {submitting ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : isSignup ? (
+                <UserPlus className="mr-2 h-4 w-4" />
+              ) : (
+                <ShieldCheck className="mr-2 h-4 w-4" />
+              )}
+              {isSignup ? "Create account" : "Login"}
+            </Button>
+          </form>
+        </Card>
+      </main>
+    </div>
+  );
+}
+
+function AccountControls({
+  user,
+  signingOut,
+  onSignOut,
+}: {
+  user: User;
+  signingOut: boolean;
+  onSignOut: () => void;
+}) {
+  return (
+    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+      <div className="max-w-full truncate rounded-md border border-white/40 bg-white/10 px-3 py-2 text-sm font-medium text-[var(--header-foreground)]">
+        {user.email ?? "Signed in"}
+      </div>
+      <Button
+        size="sm"
+        onClick={onSignOut}
+        disabled={signingOut}
+        className="self-start border border-white/70 bg-white text-primary shadow-sm hover:bg-white/90"
+      >
+        {signingOut ? (
+          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+        ) : (
+          <LogOut className="mr-2 h-4 w-4" />
+        )}
+        Sign out
+      </Button>
     </div>
   );
 }
