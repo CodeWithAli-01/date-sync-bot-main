@@ -289,6 +289,7 @@ function HomePage() {
       setSheetPreview(null);
       setPreviewDirty(false);
     }
+    e.target.value = "";
   };
 
   const onPdfChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -304,6 +305,7 @@ function HomePage() {
     setDownloadUrl(null);
     setSheetPreview(null);
     setPreviewDirty(false);
+    e.target.value = "";
   };
 
   const removePdf = (name: string) => {
@@ -930,14 +932,14 @@ function HomePage() {
                   dailyTemplateFile ? "Sample file selected" : "Upload the report template workbook"
                 }
                 icon={<FileText className="h-5 w-5" />}
-                accept=".xlsx,.xls"
+                accept=".xlsx,.xls,.xlsm"
                 ready={Boolean(dailyTemplateFile)}
                 onClick={() => dailyTemplateInputRef.current?.click()}
               >
                 <input
                   ref={dailyTemplateInputRef}
                   type="file"
-                  accept=".xlsx,.xls"
+                  accept=".xlsx,.xls,.xlsm"
                   className="hidden"
                   onChange={(event) => {
                     const file = event.target.files?.[0];
@@ -967,14 +969,14 @@ function HomePage() {
                 title="Call Log Excel"
                 subtitle={callLogFile ? "Call log selected" : "Upload the team call log workbook"}
                 icon={<FileSpreadsheet className="h-5 w-5" />}
-                accept=".xlsx,.xls"
+                accept=".xlsx,.xls,.xlsm"
                 ready={Boolean(callLogFile)}
                 onClick={() => callLogInputRef.current?.click()}
               >
                 <input
                   ref={callLogInputRef}
                   type="file"
-                  accept=".xlsx,.xls"
+                  accept=".xlsx,.xls,.xlsm"
                   className="hidden"
                   onChange={(event) => {
                     const file = event.target.files?.[0];
@@ -1425,14 +1427,14 @@ function HomePage() {
                   monthlyPlannedTemplateFile ? "Sample file selected" : "Upload the sample file"
                 }
                 icon={<FileText className="h-5 w-5" />}
-                accept=".xlsx,.xls"
+                accept=".xlsx,.xls,.xlsm"
                 ready={Boolean(monthlyPlannedTemplateFile)}
                 onClick={() => monthlyPlannedTemplateInputRef.current?.click()}
               >
                 <input
                   ref={monthlyPlannedTemplateInputRef}
                   type="file"
-                  accept=".xlsx,.xls"
+                  accept=".xlsx,.xls,.xlsm"
                   className="hidden"
                   onChange={(event) => {
                     const file = event.target.files?.[0];
@@ -1440,6 +1442,7 @@ function HomePage() {
                     setMonthlyPlannedTemplateFile(file);
                     setMonthlyPlannedReport(null);
                     setMonthlyPlannedPreview(null);
+                    event.target.value = "";
                   }}
                 />
                 {monthlyPlannedTemplateFile ? (
@@ -1464,14 +1467,14 @@ function HomePage() {
                   monthlyPlannedCallLogFile ? "Call log selected" : "Upload the monthly call log"
                 }
                 icon={<FileSpreadsheet className="h-5 w-5" />}
-                accept=".xlsx,.xls"
+                accept=".xlsx,.xls,.xlsm"
                 ready={Boolean(monthlyPlannedCallLogFile)}
                 onClick={() => monthlyPlannedCallLogInputRef.current?.click()}
               >
                 <input
                   ref={monthlyPlannedCallLogInputRef}
                   type="file"
-                  accept=".xlsx,.xls"
+                  accept=".xlsx,.xls,.xlsm"
                   className="hidden"
                   onChange={(event) => {
                     const file = event.target.files?.[0];
@@ -1479,6 +1482,7 @@ function HomePage() {
                     setMonthlyPlannedCallLogFile(file);
                     setMonthlyPlannedReport(null);
                     setMonthlyPlannedPreview(null);
+                    event.target.value = "";
                   }}
                 />
                 {monthlyPlannedCallLogFile ? (
@@ -3527,9 +3531,19 @@ function UploadCard({
         </Button>
       </div>
       <div
-        className={`min-h-24 rounded-2xl border p-3 shadow-[var(--shadow-inset)] ${
+        role={ready ? undefined : "button"}
+        tabIndex={ready ? undefined : 0}
+        onClick={ready ? undefined : onClick}
+        onKeyDown={(event) => {
+          if (ready) return;
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onClick();
+          }
+        }}
+        className={`min-h-24 rounded-2xl border p-3 shadow-[var(--shadow-inset)] transition ${
           ready ? "border-success/35 bg-success/5" : "border-white/40 bg-muted/35"
-        }`}
+        } ${ready ? "" : "cursor-pointer hover:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"}`}
       >
         {children}
       </div>
@@ -3565,7 +3579,11 @@ function FilePill({
     >
       <span className="min-w-0 truncate">{name}</span>
       <button
-        onClick={onRemove}
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          onRemove();
+        }}
         className="rounded-lg p-0.5 text-muted-foreground transition-colors hover:bg-background hover:text-destructive"
         aria-label={`Remove ${name}`}
       >
