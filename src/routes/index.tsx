@@ -296,7 +296,6 @@ function HomePage() {
     void syncAuthUserToDatabase(authUser).catch((error) => {
       console.warn("Auth user database sync failed", error);
     });
-    void syncStoredReportHistoryToDatabase();
   }, [authUser]);
 
   const updateThemeColor = (color: string) => {
@@ -403,6 +402,19 @@ function HomePage() {
     setHistoryPreview(null);
     void refreshHistory();
   }, [refreshHistory]);
+
+  useEffect(() => {
+    if (!authUser) {
+      setHistoryItems([]);
+      setHistoryPreview(null);
+      return;
+    }
+
+    void (async () => {
+      await syncStoredReportHistoryToDatabase();
+      await refreshHistory();
+    })();
+  }, [authUser, refreshHistory]);
 
   const canProcessDaily = Boolean(callLogFile) && Boolean(dailyTemplateFile) && !dailyProcessing;
   const canProcessCoverage =
