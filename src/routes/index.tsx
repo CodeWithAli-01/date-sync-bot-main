@@ -2408,9 +2408,9 @@ function DashboardHome({
               through a cleaner reporting workflow.
             </p>
             <div className="mt-5 grid gap-3 sm:flex sm:flex-wrap">
-              <Button onClick={() => onNavigate("monthly-report")} className="neuro-button">
+              <Button onClick={() => onNavigate("daily-report")} className="neuro-button">
                 <Zap className="mr-2 h-4 w-4" />
-                Start monthly report
+                Start daily report
               </Button>
               <Button variant="outline" onClick={onOpenHistory} className="neuro-button-muted">
                 <HistoryIcon className="mr-2 h-4 w-4" />
