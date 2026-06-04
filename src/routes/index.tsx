@@ -906,9 +906,9 @@ function HomePage() {
           description="Two Excel files only. No PDF upload is required."
         />
 
-        <main className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
+        <main className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
           <div className="space-y-6">
-            <div className="grid gap-4 md:grid-cols-2">
+            <div className="grid gap-4 sm:grid-cols-2">
               <UploadCard
                 step={1}
                 title="Daily Report Sample"
@@ -1005,7 +1005,7 @@ function HomePage() {
                   size="lg"
                   onClick={onDailyProcess}
                   disabled={!canProcessDaily}
-                  className="min-w-44 shadow-[var(--shadow-elegant)]"
+                  className="w-full min-w-44 shadow-[var(--shadow-elegant)] sm:w-auto"
                 >
                   {dailyProcessing ? (
                     <>
@@ -1037,7 +1037,7 @@ function HomePage() {
                       </p>
                     </div>
                   </div>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="grid w-full gap-2 sm:w-auto sm:grid-cols-2">
                     <Button
                       onClick={openDailyPreview}
                       variant="outline"
@@ -1150,9 +1150,9 @@ function HomePage() {
           description="Add coverage columns to a sample employee file."
         />
 
-        <main className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
+        <main className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
           <div className="space-y-6">
-            <div className="grid gap-4 md:grid-cols-2">
+            <div className="grid gap-4 sm:grid-cols-2">
               <UploadCard
                 step={1}
                 title="Sample Employee Excel"
@@ -1251,7 +1251,7 @@ function HomePage() {
                   size="lg"
                   onClick={onCoverageProcess}
                   disabled={!canProcessCoverage}
-                  className="min-w-44 shadow-[var(--shadow-elegant)]"
+                  className="w-full min-w-44 shadow-[var(--shadow-elegant)] sm:w-auto"
                 >
                   {coverageProcessing ? (
                     <>
@@ -1285,7 +1285,7 @@ function HomePage() {
                       </p>
                     </div>
                   </div>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="grid w-full gap-2 sm:w-auto sm:grid-cols-2">
                     <Button
                       onClick={openCoveragePreview}
                       variant="outline"
@@ -1401,9 +1401,9 @@ function HomePage() {
           description="Monthly call log summary by employee."
         />
 
-        <main className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
+        <main className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
           <div className="space-y-6">
-            <div className="grid gap-4 md:grid-cols-2">
+            <div className="grid gap-4 sm:grid-cols-2">
               <UploadCard
                 step={1}
                 title="Sample Employee Excel"
@@ -1502,7 +1502,7 @@ function HomePage() {
                   size="lg"
                   onClick={onMonthlyPlannedProcess}
                   disabled={!canProcessMonthlyPlanned}
-                  className="min-w-44 shadow-[var(--shadow-elegant)]"
+                  className="w-full min-w-44 shadow-[var(--shadow-elegant)] sm:w-auto"
                 >
                   {monthlyPlannedProcessing ? (
                     <>
@@ -1537,7 +1537,7 @@ function HomePage() {
                       </p>
                     </div>
                   </div>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="grid w-full gap-2 sm:w-auto sm:grid-cols-2">
                     <Button
                       onClick={openMonthlyPlannedPreview}
                       variant="outline"
@@ -1661,14 +1661,19 @@ function HomePage() {
 
         <main>
           <Card className="border-border bg-card p-5 shadow-[var(--shadow-soft)]">
-            <div className="mb-4 flex items-center justify-between gap-3">
+            <div className="mb-4 flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
               <div>
                 <div className="text-xs font-bold uppercase text-primary">Saved reports</div>
                 <h2 className="mt-1 text-lg font-semibold text-foreground">
                   {historyItems.length} file(s)
                 </h2>
               </div>
-              <Button variant="outline" onClick={refreshHistory} disabled={historyLoading}>
+              <Button
+                variant="outline"
+                onClick={refreshHistory}
+                disabled={historyLoading}
+                className="w-full sm:w-auto"
+              >
                 {historyLoading ? (
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 ) : (
@@ -1709,7 +1714,7 @@ function HomePage() {
                         <span>{formatBytes(item.size)}</span>
                       </div>
                     </div>
-                    <div className="flex shrink-0 gap-2">
+                    <div className="grid shrink-0 gap-2 sm:grid-cols-3 md:flex">
                       <Button
                         size="sm"
                         variant="outline"
@@ -1784,9 +1789,9 @@ function HomePage() {
         description="PDF to Excel report workbench."
       />
 
-      <main className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
-        <div className="space-y-6">
-          <div className="grid gap-4 md:grid-cols-2">
+        <main className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
+          <div className="space-y-6">
+          <div className="grid gap-4 sm:grid-cols-2">
             <UploadCard
               step={1}
               title="Monthly Report Sample"
@@ -1893,7 +1898,7 @@ function HomePage() {
                 size="lg"
                 onClick={onProcess}
                 disabled={!canProcess}
-                className="min-w-48 shadow-[var(--shadow-elegant)]"
+                className="w-full min-w-48 shadow-[var(--shadow-elegant)] sm:w-auto"
               >
                 {processing ? (
                   <>
@@ -1964,7 +1969,7 @@ function HomePage() {
 
         {/* Report */}
         {report && (
-          <Card className="border-border bg-card p-6 shadow-[var(--shadow-soft)] lg:col-span-2">
+          <Card className="border-border bg-card p-4 shadow-[var(--shadow-soft)] sm:p-6 xl:col-span-2">
             <div className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
               <div className="flex items-start gap-3">
                 <div className="flex h-10 w-10 items-center justify-center rounded-full bg-success/15 text-success">
@@ -1979,7 +1984,7 @@ function HomePage() {
                   </p>
                 </div>
               </div>
-              <div className="flex flex-wrap gap-2">
+              <div className="grid w-full gap-2 sm:w-auto sm:grid-cols-2">
                 <Button
                   onClick={openFilePreview}
                   size="lg"
@@ -2038,11 +2043,11 @@ function HomePage() {
 
             {(previewLoading || sheetPreview) && (
               <div ref={previewRef} className="mt-6">
-                <div className="mb-2 flex items-center justify-between gap-3">
+                <div className="mb-2 flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
                   <div className="text-sm font-semibold text-foreground">
                     {sheetPreview?.name ?? "Opening file preview"}
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
                     <div className="text-xs text-muted-foreground">
                       Edit any cell inline before downloading.
                     </div>
@@ -2070,7 +2075,7 @@ function HomePage() {
                       Opening Excel preview...
                     </div>
                   ) : (
-                    <table className="border-collapse text-xs">
+                    <table className="min-w-max border-collapse text-xs">
                       <tbody>
                         {sheetPreview?.rows.map((row, rowIndex) => (
                           <tr key={`row-${rowIndex}`}>
@@ -2323,7 +2328,7 @@ function ModulePageHeader({
             <p className="text-sm text-muted-foreground">{description}</p>
           </div>
         </div>
-        <ModulePill label="Ready workspace" />
+        
       </div>
     </section>
   );
