@@ -46,7 +46,12 @@ import { Toaster } from "@/components/ui/sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { parsePdf, type PdfParseResult } from "@/lib/pdf-extractor";
 import { processExcel, type ProcessReport } from "@/lib/excel-processor";
-import { processDailyReport, type DailyReportResult } from "@/lib/daily-report-processor";
+import {
+  processBulkDailyReports,
+  processDailyReport,
+  type BulkDailyReportResult,
+  type DailyReportResult,
+} from "@/lib/daily-report-processor";
 import {
   processDoctorCoverageReport,
   type DoctorCoverageResult,
@@ -172,6 +177,10 @@ function HomePage() {
   const [dailyTemplateFile, setDailyTemplateFile] = useState<File | null>(null);
   const [dailyProcessing, setDailyProcessing] = useState(false);
   const [dailyReport, setDailyReport] = useState<DailyReportResult | null>(null);
+  const [bulkDailyReport, setBulkDailyReport] = useState<BulkDailyReportResult | null>(null);
+  const [bulkDailyProcessing, setBulkDailyProcessing] = useState(false);
+  const [bulkDailyProgress, setBulkDailyProgress] = useState(0);
+  const [bulkDailyProgressLabel, setBulkDailyProgressLabel] = useState("");
   const [dailyPreview, setDailyPreview] = useState<SheetPreview | null>(null);
   const [dailyPreviewLoading, setDailyPreviewLoading] = useState(false);
   const [coverageSourceFile, setCoverageSourceFile] = useState<File | null>(null);
@@ -423,6 +432,8 @@ function HomePage() {
   }, [authUser, refreshHistory]);
 
   const canProcessDaily = Boolean(callLogFile) && Boolean(dailyTemplateFile) && !dailyProcessing;
+  const canProcessBulkDaily =
+    Boolean(callLogFile) && Boolean(dailyTemplateFile) && !bulkDailyProcessing;
   const canProcessCoverage =
     Boolean(coverageSourceFile) && Boolean(coverageTemplateFile) && !coverageProcessing;
   const canProcessMonthlyPlanned =
@@ -645,6 +656,61 @@ function HomePage() {
     }
   };
 
+  const onBulkDailyProcess = async () => {
+    if (!authUser) {
+      toast.error("Please sign in before generating reports.");
+      return;
+    }
+    if (!callLogFile) {
+      toast.error("Please upload the call log Excel file.");
+      return;
+    }
+    if (!dailyTemplateFile) {
+      toast.error("Please upload the multi-team daily sample file.");
+      return;
+    }
+
+    setBulkDailyProcessing(true);
+    setBulkDailyReport(null);
+    setBulkDailyProgress(0);
+    setBulkDailyProgressLabel("Detecting teams...");
+    try {
+      const result = await processBulkDailyReports(callLogFile, dailyTemplateFile, (status) => {
+        setBulkDailyProgress(Math.round((status.current / Math.max(status.total, 1)) * 100));
+        setBulkDailyProgressLabel(
+          `Generating ${status.teamName} (${status.current}/${status.total})`,
+        );
+      });
+
+      setBulkDailyProgress(100);
+      setBulkDailyProgressLabel("Bulk reports ready.");
+      setBulkDailyReport(result);
+      await saveReportHistoryAndDatabase({
+        id: crypto.randomUUID(),
+        userId: authUser.id,
+        fileName: result.fileName,
+        createdAt: new Date().toISOString(),
+        reportType: "Bulk Daily Reports",
+        dates: [],
+        pdfCount: 0,
+        totalEmployees: result.summary.reduce((sum, item) => sum + item.totalEmployees, 0),
+        matchedEmployees: result.summary.reduce((sum, item) => sum + item.matchedEmployees, 0),
+        size: result.blob.size,
+        blob: result.blob,
+      });
+      toast.success(
+        `Bulk daily reports ready. ${result.reportsGenerated}/${result.totalTeams} team report(s) generated.`,
+      );
+    } catch (error) {
+      console.error("Bulk daily report failed", error);
+      toast.error(
+        error instanceof Error ? error.message : "Unable to generate bulk daily reports.",
+      );
+    } finally {
+      setBulkDailyProcessing(false);
+    }
+  };
+
   const openDailyPreview = async () => {
     if (!dailyReport) return;
     setDailyPreviewLoading(true);
@@ -668,6 +734,18 @@ function HomePage() {
     const a = document.createElement("a");
     a.href = url;
     a.download = dailyReport.fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadBulkDailyReports = () => {
+    if (!bulkDailyReport) return;
+    const url = URL.createObjectURL(bulkDailyReport.blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = bulkDailyReport.fileName;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -1019,6 +1097,7 @@ function HomePage() {
                     if (!file) return;
                     setDailyTemplateFile(file);
                     setDailyReport(null);
+                    setBulkDailyReport(null);
                     setDailyPreview(null);
                   }}
                 />
@@ -1028,6 +1107,7 @@ function HomePage() {
                     onRemove={() => {
                       setDailyTemplateFile(null);
                       setDailyReport(null);
+                      setBulkDailyReport(null);
                       setDailyPreview(null);
                     }}
                     color="primary"
@@ -1056,6 +1136,7 @@ function HomePage() {
                     if (!file) return;
                     setCallLogFile(file);
                     setDailyReport(null);
+                    setBulkDailyReport(null);
                     setDailyPreview(null);
                   }}
                 />
@@ -1065,6 +1146,7 @@ function HomePage() {
                     onRemove={() => {
                       setCallLogFile(null);
                       setDailyReport(null);
+                      setBulkDailyReport(null);
                       setDailyPreview(null);
                     }}
                     color="accent"
@@ -1087,29 +1169,118 @@ function HomePage() {
                   </h2>
                   <p className="text-sm text-muted-foreground">
                     Data is matched by Employee Code only, then Planned, Unplanned, Mor, Eve, Total,
-                    and Cp are filled in the sample file.
+                    and Cp are filled in the sample file. Use all teams when the workbook has a Team
+                    Name/Team ID column or one worksheet per team.
                   </p>
                 </div>
-                <Button
-                  size="lg"
-                  onClick={onDailyProcess}
-                  disabled={!canProcessDaily}
-                  className="w-full min-w-44 shadow-[var(--shadow-elegant)] sm:w-auto"
-                >
-                  {dailyProcessing ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Processing...
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="mr-2 h-4 w-4" />
-                      Generate Report
-                    </>
-                  )}
-                </Button>
+                <div className="grid w-full gap-2 sm:w-auto sm:grid-cols-2">
+                  <Button
+                    size="lg"
+                    onClick={onDailyProcess}
+                    disabled={!canProcessDaily || bulkDailyProcessing}
+                    className="w-full min-w-44 shadow-[var(--shadow-elegant)] sm:w-auto"
+                  >
+                    {dailyProcessing ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Processing...
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="mr-2 h-4 w-4" />
+                        Generate One
+                      </>
+                    )}
+                  </Button>
+                  <Button
+                    size="lg"
+                    variant="outline"
+                    onClick={onBulkDailyProcess}
+                    disabled={!canProcessBulkDaily || dailyProcessing}
+                    className="w-full min-w-44 sm:w-auto"
+                  >
+                    {bulkDailyProcessing ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Bulk...
+                      </>
+                    ) : (
+                      <>
+                        <FileSpreadsheet className="mr-2 h-4 w-4" />
+                        Generate All Teams
+                      </>
+                    )}
+                  </Button>
+                </div>
               </div>
+
+              {bulkDailyProcessing && (
+                <div className="mt-5 space-y-2">
+                  <Progress value={bulkDailyProgress} />
+                  <div className="text-xs text-muted-foreground">{bulkDailyProgressLabel}</div>
+                </div>
+              )}
             </Card>
+
+            {bulkDailyReport && (
+              <Card className="border-border bg-card p-6 shadow-[var(--shadow-soft)]">
+                <div className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-success/15 text-success">
+                      <CheckCircle2 className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-semibold text-foreground">
+                        Bulk daily reports ready
+                      </h3>
+                      <p className="text-sm text-muted-foreground">
+                        {bulkDailyReport.reportsGenerated}/{bulkDailyReport.totalTeams} team
+                        report(s) generated. Output folder is packaged as a ZIP for your Downloads
+                        folder.
+                      </p>
+                    </div>
+                  </div>
+                  <Button onClick={downloadBulkDailyReports}>
+                    <Download className="mr-2 h-4 w-4" />
+                    Download ZIP
+                  </Button>
+                </div>
+
+                <div className="mt-6 grid gap-4 md:grid-cols-3">
+                  <Stat label="Teams processed" value={bulkDailyReport.totalTeams} />
+                  <Stat label="Reports generated" value={bulkDailyReport.reportsGenerated} />
+                  <Stat
+                    label="Failed reports"
+                    value={bulkDailyReport.failedReports}
+                    tone={bulkDailyReport.failedReports ? "warning" : "default"}
+                  />
+                </div>
+
+                <div className="mt-6 max-h-72 overflow-y-auto rounded-md border border-border">
+                  {bulkDailyReport.summary.map((item) => (
+                    <div
+                      key={item.teamName}
+                      className="grid gap-2 border-b border-border p-3 text-sm last:border-b-0 md:grid-cols-[minmax(0,1fr)_110px_120px_minmax(0,1.3fr)]"
+                    >
+                      <div className="min-w-0 font-semibold text-foreground">{item.teamName}</div>
+                      <div
+                        className={
+                          item.status === "success" ? "text-success" : "text-warning-foreground"
+                        }
+                      >
+                        {item.status}
+                      </div>
+                      <div className="text-muted-foreground">
+                        {item.matchedEmployees}/{item.totalEmployees}
+                      </div>
+                      <div className="min-w-0 truncate text-muted-foreground">
+                        {item.error ?? item.fileName}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            )}
 
             {dailyReport && (
               <Card className="border-border bg-card p-6 shadow-[var(--shadow-soft)]">
@@ -1205,7 +1376,10 @@ function HomePage() {
               <div className="space-y-3">
                 <ChecklistItem done={Boolean(callLogFile)} label="Call log attached" />
                 <ChecklistItem done={Boolean(dailyTemplateFile)} label="Sample file attached" />
-                <ChecklistItem done={Boolean(dailyReport)} label="Report generated" />
+                <ChecklistItem
+                  done={Boolean(dailyReport || bulkDailyReport)}
+                  label="Report generated"
+                />
                 <ChecklistItem done={Boolean(dailyPreview)} label="Preview opened" />
               </div>
             </Card>
