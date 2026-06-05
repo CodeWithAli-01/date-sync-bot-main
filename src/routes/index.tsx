@@ -36,6 +36,9 @@ import {
   PieChart,
   Users,
   Zap,
+  Info,
+  Brush,
+  MonitorSmartphone,
 } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
 import { Button } from "@/components/ui/button";
@@ -158,6 +161,7 @@ function HomePage() {
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [signingOut, setSigningOut] = useState(false);
   const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
+  const [activeDeviceCount, setActiveDeviceCount] = useState<number | null>(null);
   const [activeModule, setActiveModule] = useState<ActiveModule>(null);
   const [dashboardLine, setDashboardLine] = useState(DASHBOARD_LINES[0]);
   const [themeColor, setThemeColor] = useState(DEFAULT_THEME_COLOR);
@@ -448,6 +452,7 @@ function HomePage() {
     if (!authUser) {
       setHistoryItems([]);
       setHistoryPreview(null);
+      setActiveDeviceCount(null);
       return;
     }
 
@@ -456,6 +461,29 @@ function HomePage() {
       await refreshHistory();
     })();
   }, [authUser, refreshHistory]);
+
+  useEffect(() => {
+    if (!authUser) {
+      setActiveDeviceCount(null);
+      return;
+    }
+
+    void (async () => {
+      const { count, error } = await supabase
+        .from("auth_device_sessions")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", authUser.id)
+        .is("revoked_at", null);
+
+      if (error) {
+        console.warn("Unable to load active device count", error);
+        setActiveDeviceCount(null);
+        return;
+      }
+
+      setActiveDeviceCount(count ?? 0);
+    })();
+  }, [authUser]);
 
   const canProcessDaily = callLogFiles.length > 0 && Boolean(dailyTemplateFile) && !dailyProcessing;
   const canProcessCoverage =
@@ -1053,6 +1081,7 @@ function HomePage() {
           profilePhoto={profilePhoto}
           color={themeColor}
           mode={themeMode}
+          activeDeviceCount={activeDeviceCount}
           signingOut={signingOut}
           onProfilePhotoChange={updateProfilePhoto}
           onChange={updateThemeColor}
@@ -2991,6 +3020,7 @@ function ProfilePage({
   profilePhoto,
   color,
   mode,
+  activeDeviceCount,
   signingOut,
   onProfilePhotoChange,
   onChange,
@@ -3001,6 +3031,7 @@ function ProfilePage({
   profilePhoto: string | null;
   color: string;
   mode: "light" | "dark";
+  activeDeviceCount: number | null;
   signingOut: boolean;
   onProfilePhotoChange: (photo: string | null) => void;
   onChange: (color: string) => void;
@@ -3013,6 +3044,9 @@ function ProfilePage({
   const [cropX, setCropX] = useState(0);
   const [cropY, setCropY] = useState(0);
   const [cropSaving, setCropSaving] = useState(false);
+  const [showEditProfile, setShowEditProfile] = useState(false);
+  const [showColorPanel, setShowColorPanel] = useState(false);
+  const [showAbout, setShowAbout] = useState(false);
   const displayName = getUserDisplayName(user);
 
   const onProfilePhotoSelected = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -3062,47 +3096,154 @@ function ProfilePage({
 
   return (
     <main className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
-      <section className="neuro-panel p-4 sm:p-6">
-        <div className="flex min-w-0 items-center gap-3 sm:gap-4">
-          <UserAvatar user={user} photo={profilePhoto} className="h-14 w-14 rounded-2xl" />
-          <div className="min-w-0">
-            <div className="text-xs font-bold uppercase tracking-wide text-primary">
-              User profile
+      <div className="space-y-5">
+        <section className="neuro-panel p-4 sm:p-6">
+          <div className="flex min-w-0 items-center gap-3 sm:gap-4">
+            <UserAvatar user={user} photo={profilePhoto} className="h-14 w-14 rounded-2xl" />
+            <div className="min-w-0">
+              <div className="text-xs font-bold uppercase tracking-wide text-primary">Profile</div>
+              <h1 className="mt-1 truncate text-xl font-bold text-foreground sm:text-2xl">
+                {displayName}
+              </h1>
+              <p className="text-sm text-muted-foreground">Account, theme, and login details.</p>
             </div>
-            <h1 className="mt-1 truncate text-xl font-bold text-foreground sm:text-2xl">
-              {displayName}
-            </h1>
-            <p className="text-sm text-muted-foreground">
-              Account controls and interface settings.
-            </p>
           </div>
-        </div>
 
-        <div className="mt-8 grid gap-4 sm:grid-cols-2">
-          <div className="neuro-inset p-4">
-            <div className="text-xs font-bold uppercase tracking-wide text-primary">Name</div>
-            <div className="mt-2 truncate text-sm font-semibold text-foreground">{displayName}</div>
-          </div>
-          <div className="neuro-inset p-4">
-            <div className="text-xs font-bold uppercase tracking-wide text-primary">Theme</div>
-            <div className="mt-2 text-sm font-semibold text-foreground">
-              {mode === "dark" ? "Dark mode" : "Light mode"}
+          <div className="mt-6 grid gap-4 sm:grid-cols-3">
+            <div className="neuro-inset p-4">
+              <div className="text-xs font-bold uppercase tracking-wide text-primary">Name</div>
+              <div className="mt-2 truncate text-sm font-semibold text-foreground">
+                {displayName}
+              </div>
+            </div>
+            <div className="neuro-inset p-4">
+              <div className="text-xs font-bold uppercase tracking-wide text-primary">Theme</div>
+              <div className="mt-2 text-sm font-semibold text-foreground">
+                {mode === "dark" ? "Dark mode" : "Light mode"}
+              </div>
+            </div>
+            <div className="neuro-inset p-4">
+              <div className="text-xs font-bold uppercase tracking-wide text-primary">Devices</div>
+              <div className="mt-2 text-sm font-semibold text-foreground">
+                {activeDeviceCount ?? "Not available"}
+              </div>
             </div>
           </div>
-        </div>
-      </section>
+        </section>
+
+        <section className="neuro-panel p-5 sm:p-6">
+          <div className="mb-5 flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-bold uppercase tracking-wide text-primary">
+                Interface
+              </div>
+              <h2 className="text-lg font-semibold text-foreground">Theme controls</h2>
+            </div>
+            <Settings className="h-5 w-5 text-primary" />
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Button type="button" onClick={onToggleMode} className="neuro-button min-h-12 w-full">
+              {mode === "dark" ? (
+                <Sun className="mr-2 h-4 w-4" />
+              ) : (
+                <Moon className="mr-2 h-4 w-4" />
+              )}
+              {mode === "dark" ? "Light theme" : "Dark theme"}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setShowColorPanel((value) => !value)}
+              className="neuro-button-muted min-h-12 w-full"
+            >
+              <Brush className="mr-2 h-4 w-4" />
+              Change color
+            </Button>
+          </div>
+
+          {showColorPanel && (
+            <div className="mt-5 rounded-2xl border border-border bg-card/45 p-4 shadow-[var(--shadow-inset)]">
+              <div className="grid grid-cols-5 gap-2 sm:grid-cols-10">
+                {THEME_COLORS.map((item) => (
+                  <button
+                    key={item}
+                    type="button"
+                    className={`h-10 rounded-xl transition hover:scale-105 ${
+                      color.toLowerCase() === item.toLowerCase() ? "ring-2 ring-primary" : ""
+                    }`}
+                    style={{ backgroundColor: item }}
+                    onClick={() => onChange(item)}
+                    aria-label={`Use color ${item}`}
+                  />
+                ))}
+              </div>
+              <input
+                type="color"
+                value={color}
+                onChange={(event) => onChange(event.target.value)}
+                className="mt-4 h-11 w-full cursor-pointer rounded-xl border border-border bg-background p-1 shadow-[var(--shadow-inset)]"
+                aria-label="Choose custom theme color"
+              />
+            </div>
+          )}
+        </section>
+
+        <section className="neuro-panel p-5 sm:p-6">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-bold uppercase tracking-wide text-primary">About</div>
+              <h2 className="text-lg font-semibold text-foreground">Account information</h2>
+            </div>
+            <Info className="h-5 w-5 text-primary" />
+          </div>
+
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setShowAbout((value) => !value)}
+            className="neuro-button-muted w-full sm:w-auto"
+          >
+            <Info className="mr-2 h-4 w-4" />
+            About
+          </Button>
+
+          {showAbout && (
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <div className="neuro-inset p-4">
+                <div className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-primary">
+                  <Mail className="h-4 w-4" />
+                  Email
+                </div>
+                <div className="break-all text-sm font-semibold text-foreground">
+                  {user.email ?? "No email"}
+                </div>
+              </div>
+              <div className="neuro-inset p-4">
+                <div className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-primary">
+                  <MonitorSmartphone className="h-4 w-4" />
+                  Active devices
+                </div>
+                <div className="text-sm font-semibold text-foreground">
+                  {activeDeviceCount === null
+                    ? "Not available"
+                    : `${activeDeviceCount}/2 device(s)`}
+                </div>
+              </div>
+            </div>
+          )}
+        </section>
+      </div>
 
       <aside className="space-y-6">
         <section className="neuro-panel p-5">
           <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-foreground">
             <UserCircle className="h-4 w-4 text-primary" />
-            Profile photo
+            Profile
           </div>
           <div className="mb-4 flex items-center gap-4">
             <UserAvatar user={user} photo={profilePhoto} className="h-16 w-16 rounded-2xl" />
-            <div className="min-w-0 text-sm text-muted-foreground">
-              This photo appears in the profile shortcut.
-            </div>
+            <div className="min-w-0 text-sm text-muted-foreground">{displayName}</div>
           </div>
           <input
             ref={photoInputRef}
@@ -3111,38 +3252,49 @@ function ProfilePage({
             className="hidden"
             onChange={onProfilePhotoSelected}
           />
-          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
-            <Button
-              type="button"
-              onClick={() => photoInputRef.current?.click()}
-              className="neuro-button w-full"
-            >
-              <Upload className="mr-2 h-4 w-4" />
-              Upload photo
-            </Button>
-            {profilePhoto && (
-              <>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => openCropEditor(profilePhoto)}
-                  className="neuro-button-muted w-full"
-                >
-                  <Palette className="mr-2 h-4 w-4" />
-                  Edit crop
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => onProfilePhotoChange(null)}
-                  className="neuro-button-muted w-full"
-                >
-                  <X className="mr-2 h-4 w-4" />
-                  Remove photo
-                </Button>
-              </>
-            )}
-          </div>
+          <Button
+            type="button"
+            onClick={() => setShowEditProfile((value) => !value)}
+            className="neuro-button w-full"
+          >
+            <UserCircle className="mr-2 h-4 w-4" />
+            Edit profile
+          </Button>
+
+          {showEditProfile && (
+            <div className="mt-4 grid gap-2">
+              <Button
+                type="button"
+                onClick={() => photoInputRef.current?.click()}
+                className="neuro-button w-full"
+              >
+                <Upload className="mr-2 h-4 w-4" />
+                Upload photo
+              </Button>
+              {profilePhoto && (
+                <>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => openCropEditor(profilePhoto)}
+                    className="neuro-button-muted w-full"
+                  >
+                    <Palette className="mr-2 h-4 w-4" />
+                    Edit crop
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => onProfilePhotoChange(null)}
+                    className="neuro-button-muted w-full"
+                  >
+                    <X className="mr-2 h-4 w-4" />
+                    Remove photo
+                  </Button>
+                </>
+              )}
+            </div>
+          )}
         </section>
 
         <Dialog open={Boolean(cropImage)} onOpenChange={(open) => !open && setCropImage(null)}>
@@ -3228,38 +3380,6 @@ function ProfilePage({
             )}
           </DialogContent>
         </Dialog>
-
-        <section className="neuro-panel p-5">
-          <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-foreground">
-            <Settings className="h-4 w-4 text-primary" />
-            Interface
-          </div>
-          <Button type="button" onClick={onToggleMode} className="neuro-button mb-4 w-full">
-            {mode === "dark" ? <Sun className="mr-2 h-4 w-4" /> : <Moon className="mr-2 h-4 w-4" />}
-            {mode === "dark" ? "Use light theme" : "Use dark theme"}
-          </Button>
-          <div className="grid grid-cols-5 gap-2">
-            {THEME_COLORS.map((item) => (
-              <button
-                key={item}
-                type="button"
-                className={`h-9 rounded-lg transition hover:scale-105 ${
-                  color.toLowerCase() === item.toLowerCase() ? "ring-2 ring-primary" : ""
-                }`}
-                style={{ backgroundColor: item }}
-                onClick={() => onChange(item)}
-                aria-label={`Use color ${item}`}
-              />
-            ))}
-          </div>
-          <input
-            type="color"
-            value={color}
-            onChange={(event) => onChange(event.target.value)}
-            className="mt-4 h-10 w-full cursor-pointer rounded-xl border border-border bg-background p-1 shadow-[var(--shadow-inset)]"
-            aria-label="Choose custom theme color"
-          />
-        </section>
 
         <section className="neuro-panel p-5">
           <Button
