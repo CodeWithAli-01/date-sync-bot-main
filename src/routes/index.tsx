@@ -42,6 +42,8 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Slider } from "@/components/ui/slider";
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
 import { supabase } from "@/integrations/supabase/client";
@@ -2877,6 +2879,80 @@ function readFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
+function loadImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = src;
+  });
+}
+
+async function cropProfileImage(
+  src: string,
+  crop: { zoom: number; x: number; y: number },
+): Promise<string> {
+  const image = await loadImage(src);
+  const previewSize = 240;
+  const outputSize = 512;
+  const canvas = document.createElement("canvas");
+  canvas.width = outputSize;
+  canvas.height = outputSize;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Canvas is not available.");
+
+  const coverScale = Math.max(previewSize / image.naturalWidth, previewSize / image.naturalHeight);
+  const drawScale = coverScale * crop.zoom * (outputSize / previewSize);
+  const width = image.naturalWidth * drawScale;
+  const height = image.naturalHeight * drawScale;
+  const offsetX = crop.x * (outputSize / previewSize);
+  const offsetY = crop.y * (outputSize / previewSize);
+
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, outputSize, outputSize);
+  context.drawImage(
+    image,
+    (outputSize - width) / 2 + offsetX,
+    (outputSize - height) / 2 + offsetY,
+    width,
+    height,
+  );
+
+  return canvas.toDataURL("image/jpeg", 0.9);
+}
+
+function CropSlider({
+  label,
+  value,
+  min,
+  max,
+  step,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <label className="block space-y-2">
+      <div className="flex items-center justify-between gap-3 text-sm font-semibold text-foreground">
+        <span>{label}</span>
+        <span className="text-xs text-muted-foreground">{value.toFixed(step < 1 ? 2 : 0)}</span>
+      </div>
+      <Slider
+        value={[value]}
+        min={min}
+        max={max}
+        step={step}
+        onValueChange={(next) => onChange(next[0] ?? value)}
+      />
+    </label>
+  );
+}
+
 function ProfilePage({
   user,
   profilePhoto,
@@ -2899,6 +2975,11 @@ function ProfilePage({
   onSignOut: () => void;
 }) {
   const photoInputRef = useRef<HTMLInputElement>(null);
+  const [cropImage, setCropImage] = useState<string | null>(null);
+  const [cropZoom, setCropZoom] = useState(1);
+  const [cropX, setCropX] = useState(0);
+  const [cropY, setCropY] = useState(0);
+  const [cropSaving, setCropSaving] = useState(false);
   const displayName = getUserDisplayName(user);
 
   const onProfilePhotoSelected = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -2915,11 +2996,34 @@ function ProfilePage({
     }
 
     try {
-      onProfilePhotoChange(await readFileAsDataUrl(file));
-      toast.success("Profile photo updated.");
+      openCropEditor(await readFileAsDataUrl(file));
     } catch (error) {
       console.error("Profile photo read failed", error);
       toast.error("Unable to use this profile photo.");
+    }
+  };
+
+  const openCropEditor = (image: string) => {
+    setCropImage(image);
+    setCropZoom(1);
+    setCropX(0);
+    setCropY(0);
+  };
+
+  const saveCroppedProfilePhoto = async () => {
+    if (!cropImage) return;
+    setCropSaving(true);
+    try {
+      onProfilePhotoChange(
+        await cropProfileImage(cropImage, { zoom: cropZoom, x: cropX, y: cropY }),
+      );
+      setCropImage(null);
+      toast.success("Profile photo updated.");
+    } catch (error) {
+      console.error("Profile crop failed", error);
+      toast.error("Unable to crop this profile photo.");
+    } finally {
+      setCropSaving(false);
     }
   };
 
@@ -2984,18 +3088,101 @@ function ProfilePage({
               Upload photo
             </Button>
             {profilePhoto && (
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => onProfilePhotoChange(null)}
-                className="neuro-button-muted w-full"
-              >
-                <X className="mr-2 h-4 w-4" />
-                Remove photo
-              </Button>
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => openCropEditor(profilePhoto)}
+                  className="neuro-button-muted w-full"
+                >
+                  <Palette className="mr-2 h-4 w-4" />
+                  Edit crop
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => onProfilePhotoChange(null)}
+                  className="neuro-button-muted w-full"
+                >
+                  <X className="mr-2 h-4 w-4" />
+                  Remove photo
+                </Button>
+              </>
             )}
           </div>
         </section>
+
+        <Dialog open={Boolean(cropImage)} onOpenChange={(open) => !open && setCropImage(null)}>
+          <DialogContent className="max-w-md border-border bg-card">
+            <DialogHeader>
+              <DialogTitle>Edit profile photo</DialogTitle>
+            </DialogHeader>
+            {cropImage && (
+              <div className="space-y-5">
+                <div className="mx-auto h-60 w-60 overflow-hidden rounded-full bg-muted shadow-[var(--shadow-inset)]">
+                  <img
+                    src={cropImage}
+                    alt="Profile crop preview"
+                    className="h-full w-full object-cover"
+                    style={{
+                      transform: `translate(${cropX}px, ${cropY}px) scale(${cropZoom})`,
+                    }}
+                  />
+                </div>
+
+                <CropSlider
+                  label="Zoom"
+                  value={cropZoom}
+                  min={1}
+                  max={3}
+                  step={0.05}
+                  onChange={setCropZoom}
+                />
+                <CropSlider
+                  label="Horizontal"
+                  value={cropX}
+                  min={-100}
+                  max={100}
+                  step={1}
+                  onChange={setCropX}
+                />
+                <CropSlider
+                  label="Vertical"
+                  value={cropY}
+                  min={-100}
+                  max={100}
+                  step={1}
+                  onChange={setCropY}
+                />
+
+                <div className="grid gap-2 sm:grid-cols-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      setCropZoom(1);
+                      setCropX(0);
+                      setCropY(0);
+                    }}
+                  >
+                    Reset
+                  </Button>
+                  <Button type="button" variant="outline" onClick={() => setCropImage(null)}>
+                    Cancel
+                  </Button>
+                  <Button type="button" onClick={saveCroppedProfilePhoto} disabled={cropSaving}>
+                    {cropSaving ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Save className="mr-2 h-4 w-4" />
+                    )}
+                    Save
+                  </Button>
+                </div>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
 
         <section className="neuro-panel p-5">
           <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-foreground">
