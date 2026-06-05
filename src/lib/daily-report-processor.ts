@@ -1,5 +1,4 @@
 import ExcelJS from "exceljs";
-import JSZip from "jszip";
 
 export interface DailyReportResult {
   totalEmployees: number;
@@ -20,7 +19,6 @@ export interface DailyReportResult {
 
 export interface BulkDailyReportSummaryItem {
   teamName: string;
-  fileName: string;
   status: "success" | "failed";
   totalEmployees: number;
   matchedEmployees: number;
@@ -74,6 +72,13 @@ type DailyTeamSource =
       teamCol: number;
     };
 
+interface DailySheetProcessResult {
+  totalEmployees: number;
+  matchedEmployees: number;
+  unmatchedEmployees: string[];
+  preview: { name: string; total: number }[];
+}
+
 const CALL_HEADER_HINTS: Record<string, string[]> = {
   code: ["emp. id", "emp id", "employee id", "employee code"],
   name: ["employee name", "name"],
@@ -126,30 +131,18 @@ export async function processBulkDailyReports(
     );
   }
 
-  const zip = new JSZip();
   const summary: BulkDailyReportSummaryItem[] = [];
-  const usedReportFileNames = new Set<string>();
 
   for (let index = 0; index < teamSources.length; index++) {
     const source = teamSources[index];
     onProgress?.({ current: index + 1, total: teamSources.length, teamName: source.teamName });
 
     try {
-      const workbook = new ExcelJS.Workbook();
-      await workbook.xlsx.load(await teamsWorkbookFile.arrayBuffer());
-      const sheet = prepareTeamWorksheet(workbook, source);
-      const result = await processDailyWorkbook(
-        callLog,
-        workbook,
-        sheet,
-        teamsWorkbookFile.name,
-        source.teamName,
-      );
-      const reportFileName = uniqueFileName(result.fileName, usedReportFileNames);
-      zip.file(reportFileName, await result.blob.arrayBuffer());
+      const sheet = teamsWorkbook.getWorksheet(source.sheetName);
+      if (!sheet) throw new Error(`Team sheet not found: ${source.sheetName}`);
+      const result = processDailySheet(callLog, sheet, rowMatchesTeamSource(source));
       summary.push({
         teamName: source.teamName,
-        fileName: reportFileName,
         status: "success",
         totalEmployees: result.totalEmployees,
         matchedEmployees: result.matchedEmployees,
@@ -157,7 +150,6 @@ export async function processBulkDailyReports(
     } catch (error) {
       summary.push({
         teamName: source.teamName,
-        fileName: "",
         status: "failed",
         totalEmployees: 0,
         matchedEmployees: 0,
@@ -166,12 +158,9 @@ export async function processBulkDailyReports(
     }
   }
 
-  const summaryWorkbook = buildBulkSummaryWorkbook(summary);
-  zip.file("Bulk_Daily_Report_Summary.xlsx", await summaryWorkbook.xlsx.writeBuffer());
-
-  const blob = await zip.generateAsync({
-    type: "blob",
-    mimeType: "application/zip",
+  const buffer = await teamsWorkbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   });
 
   const reportsGenerated = summary.filter((item) => item.status === "success").length;
@@ -180,7 +169,7 @@ export async function processBulkDailyReports(
     reportsGenerated,
     failedReports: summary.length - reportsGenerated,
     blob,
-    fileName: "Daily Reports Output.zip",
+    fileName: teamsWorkbookFile.name.replace(/\.xlsx$/i, "") + " - Daily Report.xlsx",
     summary,
   };
 }
@@ -192,20 +181,57 @@ async function processDailyWorkbook(
   templateFileName: string,
   teamName?: string,
 ): Promise<DailyReportResult> {
+  const result = processDailySheet(callLog, sheet);
+
+  const buffer = await templateWorkbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+
+  return {
+    totalEmployees: result.totalEmployees,
+    matchedEmployees: result.matchedEmployees,
+    unmatchedEmployees: result.unmatchedEmployees,
+    warnings: result.unmatchedEmployees.length
+      ? [`${result.unmatchedEmployees.length} call log employee(s) were not found in the template.`]
+      : [],
+    debug: {
+      callRows: callLog.callRows,
+      faceToFaceRows: callLog.faceToFaceRows,
+      contactPointRows: callLog.contactPointRows,
+      templateRows: result.totalEmployees,
+    },
+    blob,
+    fileName: teamName
+      ? `${safeFileName(teamName)}_Report.xlsx`
+      : templateFileName.replace(/\.xlsx$/i, "") + " - Daily Report.xlsx",
+    sheetName: sheet.name,
+    preview: result.preview,
+  };
+}
+
+function processDailySheet(
+  callLog: Awaited<ReturnType<typeof readCallLogs>>,
+  sheet: ExcelJS.Worksheet,
+  shouldProcessRow: (row: ExcelJS.Row) => boolean = () => true,
+): DailySheetProcessResult {
   const columns = findTemplateColumns(sheet);
   if (!columns) throw new Error("Template columns were not found.");
+
   const summariesByCode = new Map(callLog.summaries.map((item) => [item.code, item]));
   const unmatched = new Set(callLog.summaries.map((item) => `${item.code} ${item.name}`));
   const preview: { name: string; total: number }[] = [];
   let matchedEmployees = 0;
-  let templateRows = 0;
+  let totalEmployees = 0;
 
-  for (let rowNumber = 1; rowNumber <= sheet.rowCount; rowNumber++) {
+  for (let rowNumber = columns.headerRow + 1; rowNumber <= sheet.rowCount; rowNumber++) {
     const row = sheet.getRow(rowNumber);
+    if (!shouldProcessRow(row)) continue;
+
     const code = normalizeEmployeeCode(cellText(row.getCell(columns.codeCol)));
     const name = cellText(row.getCell(columns.nameCol));
     if (!code) continue;
-    templateRows++;
+    totalEmployees++;
 
     const match = summariesByCode.get(code);
     if (!match) {
@@ -226,29 +252,10 @@ async function processDailyWorkbook(
     if (match.total > 0) preview.push({ name: name || match.name, total: match.total });
   }
 
-  const buffer = await templateWorkbook.xlsx.writeBuffer();
-  const blob = new Blob([buffer], {
-    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  });
-
   return {
-    totalEmployees: templateRows,
+    totalEmployees,
     matchedEmployees,
     unmatchedEmployees: [...unmatched],
-    warnings: unmatched.size
-      ? [`${unmatched.size} call log employee(s) were not found in the template.`]
-      : [],
-    debug: {
-      callRows: callLog.callRows,
-      faceToFaceRows: callLog.faceToFaceRows,
-      contactPointRows: callLog.contactPointRows,
-      templateRows,
-    },
-    blob,
-    fileName: teamName
-      ? `${safeFileName(teamName)}_Report.xlsx`
-      : templateFileName.replace(/\.xlsx$/i, "") + " - Daily Report.xlsx",
-    sheetName: sheet.name,
     preview: preview.sort((a, b) => b.total - a.total).slice(0, 10),
   };
 }
