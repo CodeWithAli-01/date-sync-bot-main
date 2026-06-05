@@ -2113,7 +2113,9 @@ function HomePage() {
             <div className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
               <div>
                 <div className="text-xs font-bold uppercase text-primary">Step 3</div>
-                <h2 className="mt-1 text-lg font-semibold text-foreground">Generate report</h2>
+                <h2 className="mt-1 text-lg font-semibold text-foreground">
+                  Generate monthly report
+                </h2>
                 <p className="text-sm text-muted-foreground">
                   Extraction, validation sheet, database history, and editable Excel export.
                 </p>
@@ -2132,7 +2134,7 @@ function HomePage() {
                 ) : (
                   <>
                     <Sparkles className="mr-2 h-4 w-4" />
-                    Process & Update Excel
+                    Generate report
                   </>
                 )}
               </Button>
