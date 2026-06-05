@@ -427,22 +427,34 @@ function HomePage() {
       )
     : null;
 
-  const refreshHistory = useCallback(async () => {
-    if (!authUser) {
-      setHistoryItems([]);
-      return;
-    }
+  const refreshHistory = useCallback(
+    async (force = false) => {
+      if (!authUser) {
+        setHistoryItems([]);
+        return;
+      }
 
-    setHistoryLoading(true);
-    try {
-      setHistoryItems(await listReportHistory(authUser.id));
-    } catch (error) {
-      console.error("History load failed", error);
-      toast.error("Unable to load report history.");
-    } finally {
-      setHistoryLoading(false);
-    }
-  }, [authUser]);
+      const cachedItems = force ? null : readReportHistoryCache(authUser.id);
+      if (cachedItems) {
+        setHistoryItems(cachedItems);
+        setHistoryLoading(false);
+        return;
+      }
+
+      setHistoryLoading(true);
+      try {
+        const nextItems = await listReportHistory(authUser.id);
+        setHistoryItems(nextItems);
+        writeReportHistoryCache(authUser.id, nextItems);
+      } catch (error) {
+        console.error("History load failed", error);
+        toast.error("Unable to load report history.");
+      } finally {
+        setHistoryLoading(false);
+      }
+    },
+    [authUser],
+  );
 
   const openHistory = useCallback(() => {
     setActiveModule("history");
@@ -458,9 +470,16 @@ function HomePage() {
       return;
     }
 
+    const cachedItems = readReportHistoryCache(authUser.id);
+    if (cachedItems) {
+      setHistoryItems(cachedItems);
+      setHistoryLoading(false);
+      return;
+    }
+
     void (async () => {
       await syncStoredReportHistoryToDatabase(authUser.id);
-      await refreshHistory();
+      await refreshHistory(true);
     })();
   }, [authUser, refreshHistory]);
 
@@ -478,7 +497,7 @@ function HomePage() {
           filter: `user_id=eq.${authUser.id}`,
         },
         () => {
-          void refreshHistory();
+          void refreshHistory(true);
         },
       )
       .subscribe();
@@ -536,7 +555,7 @@ function HomePage() {
           size: nextReport.blob.size,
           blob: nextReport.blob,
         });
-        await refreshHistory();
+        await refreshHistory(true);
       } catch (error) {
         console.error("History save failed", error);
         toast.warning("Report ready, but history save failed.");
@@ -745,7 +764,7 @@ function HomePage() {
           size: bulkResult.blob.size,
           blob: bulkResult.blob,
         });
-        await refreshHistory();
+        await refreshHistory(true);
         toast.success(
           `Daily report ready. ${bulkResult.reportsGenerated}/${bulkResult.totalTeams} team sheet(s) updated.`,
         );
@@ -772,7 +791,7 @@ function HomePage() {
         size: result.blob.size,
         blob: result.blob,
       });
-      await refreshHistory();
+      await refreshHistory(true);
       if (result.warnings.length) toast.warning(result.warnings[0]);
       toast.success(`Daily report ready. ${result.matchedEmployees} employee(s) matched.`);
     } catch (error) {
@@ -844,7 +863,7 @@ function HomePage() {
         size: result.blob.size,
         blob: result.blob,
       });
-      await refreshHistory();
+      await refreshHistory(true);
       if (result.warnings.length) toast.warning(result.warnings[0]);
       toast.success(
         `Doctor coverage report ready. ${result.matchedEmployees} employee(s) matched.`,
@@ -920,7 +939,7 @@ function HomePage() {
         size: result.blob.size,
         blob: result.blob,
       });
-      await refreshHistory();
+      await refreshHistory(true);
       if (result.warnings.length) toast.warning(result.warnings[0]);
       toast.success(
         `Monthly planned/unplanned report ready. ${result.matchedEmployees} employee(s) matched.`,
@@ -975,7 +994,7 @@ function HomePage() {
       const item = await getReportHistory(id, authUser.id);
       if (!item) {
         toast.error("History file not found.");
-        await refreshHistory();
+        await refreshHistory(true);
         return;
       }
       const url = URL.createObjectURL(item.blob);
@@ -1000,7 +1019,7 @@ function HomePage() {
       const item = await getReportHistory(id, authUser.id);
       if (!item) {
         toast.error("History file not found.");
-        await refreshHistory();
+        await refreshHistory(true);
         return;
       }
       const preview = await buildSheetPreview(item.blob);
@@ -1017,7 +1036,8 @@ function HomePage() {
     if (!authUser) return;
     try {
       await deleteReportHistory(id, authUser.id);
-      await refreshHistory();
+      clearReportHistoryCache(authUser.id);
+      await refreshHistory(true);
       setHistoryPreview(null);
       toast.success("History file removed.");
     } catch (error) {
@@ -2090,7 +2110,7 @@ function HomePage() {
               </div>
               <Button
                 variant="outline"
-                onClick={refreshHistory}
+                onClick={() => refreshHistory(true)}
                 disabled={historyLoading}
                 className="w-full sm:w-auto"
               >
@@ -3904,6 +3924,58 @@ function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
 
 const REPORT_HISTORY_DB = "report-history-db";
 const REPORT_HISTORY_STORE = "reports";
+const REPORT_HISTORY_CACHE_PREFIX = "report-history-cache";
+const REPORT_HISTORY_CACHE_TTL_MS = 10 * 60 * 1000;
+
+interface ReportHistoryCachePayload {
+  cachedAt: number;
+  items: ReportHistoryItem[];
+}
+
+function reportHistoryCacheKey(userId: string): string {
+  return `${REPORT_HISTORY_CACHE_PREFIX}:${userId}`;
+}
+
+function readReportHistoryCache(userId: string): ReportHistoryItem[] | null {
+  if (typeof window === "undefined") return null;
+
+  try {
+    const raw = window.localStorage.getItem(reportHistoryCacheKey(userId));
+    if (!raw) return null;
+
+    const payload = JSON.parse(raw) as Partial<ReportHistoryCachePayload>;
+    if (!payload.cachedAt || !Array.isArray(payload.items)) return null;
+    if (Date.now() - payload.cachedAt > REPORT_HISTORY_CACHE_TTL_MS) {
+      window.localStorage.removeItem(reportHistoryCacheKey(userId));
+      return null;
+    }
+
+    return payload.items;
+  } catch (error) {
+    console.warn("Report history cache read failed", error);
+    window.localStorage.removeItem(reportHistoryCacheKey(userId));
+    return null;
+  }
+}
+
+function writeReportHistoryCache(userId: string, items: ReportHistoryItem[]) {
+  if (typeof window === "undefined") return;
+
+  try {
+    const payload: ReportHistoryCachePayload = {
+      cachedAt: Date.now(),
+      items,
+    };
+    window.localStorage.setItem(reportHistoryCacheKey(userId), JSON.stringify(payload));
+  } catch (error) {
+    console.warn("Report history cache write failed", error);
+  }
+}
+
+function clearReportHistoryCache(userId: string) {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(reportHistoryCacheKey(userId));
+}
 
 function openReportHistoryDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
