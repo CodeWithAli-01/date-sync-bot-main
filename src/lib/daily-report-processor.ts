@@ -63,6 +63,25 @@ interface DailyColumns {
   teamCol?: number;
 }
 
+const SELFIE_WARNING_FILL: ExcelJS.Fill = {
+  type: "pattern",
+  pattern: "solid",
+  fgColor: { argb: "FFFFFF00" },
+};
+
+const SELFIE_ZERO_FILL: ExcelJS.Fill = {
+  type: "pattern",
+  pattern: "solid",
+  fgColor: { argb: "FFFFBF00" },
+};
+
+const SELFIE_BORDER: Partial<ExcelJS.Borders> = {
+  top: { style: "thin", color: { argb: "FF000000" } },
+  left: { style: "thin", color: { argb: "FF000000" } },
+  bottom: { style: "thin", color: { argb: "FF000000" } },
+  right: { style: "thin", color: { argb: "FF000000" } },
+};
+
 type DailyTeamSource =
   | {
       kind: "sheet";
@@ -137,6 +156,7 @@ export async function processDailyReport(
   await applySelfiesToCallLog(callLog, selfieFile);
   const templateWorkbook = new ExcelJS.Workbook();
   await templateWorkbook.xlsx.load(await templateFile.arrayBuffer());
+  removeRemarksColumnsFromWorkbook(templateWorkbook);
   const sheet = selectDailyTemplateSheet(templateWorkbook, callLog);
   if (!sheet) throw new Error("Template workbook does not contain a sheet.");
 
@@ -159,6 +179,7 @@ export async function processBulkDailyReports(
   await applySelfiesToCallLog(callLog, selfieFile);
   const teamsWorkbook = new ExcelJS.Workbook();
   await teamsWorkbook.xlsx.load(await teamsWorkbookFile.arrayBuffer());
+  removeRemarksColumnsFromWorkbook(teamsWorkbook);
   const allTeamSources = findDailyTeamSources(teamsWorkbook);
   const teamSources = filterTeamSourcesByCallLogTeams(allTeamSources, callLog.teamNames);
 
@@ -263,6 +284,7 @@ function processDailySheet(
   sheet: ExcelJS.Worksheet,
   shouldProcessRow: (row: ExcelJS.Row) => boolean = () => true,
 ): DailySheetProcessResult {
+  removeRemarksColumns(sheet);
   const columns = findTemplateColumns(sheet);
   if (!columns) throw new Error("Template columns were not found.");
   const outputColumns = callLog.selfieFileCount > 0 ? ensureSelfieColumn(sheet, columns) : columns;
@@ -296,7 +318,12 @@ function processDailySheet(
     row.getCell(outputColumns.eveningCol).value = match.evening || 0;
     row.getCell(outputColumns.totalCol).value = match.total || 0;
     row.getCell(outputColumns.cpCol).value = match.cpTime || null;
-    if (outputColumns.selfieCol) row.getCell(outputColumns.selfieCol).value = match.selfies || 0;
+    if (outputColumns.selfieCol) {
+      const selfieCell = row.getCell(outputColumns.selfieCol);
+      const selfieCount = match.selfies || 0;
+      selfieCell.value = formatSelfieText(selfieCount);
+      styleSelfieCell(selfieCell, selfieCount);
+    }
 
     styleDailyCells(row, outputColumns);
     if (match.total > 0) preview.push({ name: name || match.name, total: match.total });
@@ -757,24 +784,100 @@ function findTemplateColumns(sheet: ExcelJS.Worksheet, required = true): DailyCo
   );
 }
 
+function removeRemarksColumns(sheet: ExcelJS.Worksheet) {
+  for (let rowNumber = 1; rowNumber <= Math.min(sheet.rowCount, 12); rowNumber++) {
+    const row = sheet.getRow(rowNumber);
+    const remarksColumns: number[] = [];
+
+    for (let c = 1; c <= sheet.columnCount; c++) {
+      const label = normalize(cellText(row.getCell(c)));
+      if (label === "remarks" || label === "remark") remarksColumns.push(c);
+    }
+
+    if (!remarksColumns.length) continue;
+    const titleValue = findSheetTitleValue(sheet, rowNumber);
+    for (const col of remarksColumns.sort((a, b) => b - a)) {
+      sheet.spliceColumns(col, 1);
+    }
+    restoreSheetTitleValue(sheet, rowNumber, titleValue);
+    return;
+  }
+}
+
+function removeRemarksColumnsFromWorkbook(workbook: ExcelJS.Workbook) {
+  for (const sheet of workbook.worksheets) removeRemarksColumns(sheet);
+}
+
+function findSheetTitleValue(sheet: ExcelJS.Worksheet, headerRowNumber: number): string {
+  for (let rowNumber = 1; rowNumber < headerRowNumber; rowNumber++) {
+    const row = sheet.getRow(rowNumber);
+    for (let colNumber = 1; colNumber <= sheet.columnCount; colNumber++) {
+      const value = cellText(row.getCell(colNumber)).trim();
+      if (value) return value;
+    }
+  }
+  return sheet.name;
+}
+
+function restoreSheetTitleValue(
+  sheet: ExcelJS.Worksheet,
+  headerRowNumber: number,
+  titleValue: string,
+) {
+  if (!titleValue) return;
+  for (let rowNumber = 1; rowNumber < headerRowNumber; rowNumber++) {
+    const row = sheet.getRow(rowNumber);
+    for (let colNumber = 1; colNumber <= sheet.columnCount; colNumber++) {
+      const cell = row.getCell(colNumber);
+      const isMergedChild = cell.isMerged && cell.master?.address !== cell.address;
+      if (isMergedChild) continue;
+
+      const currentValue = cellText(cell).trim();
+      const looksLikeTitleCell =
+        cell.isMerged || colNumber === 1 || normalize(currentValue) === normalize(sheet.name);
+      if (looksLikeTitleCell && !currentValue) {
+        cell.value = titleValue;
+        row.commit();
+        return;
+      }
+    }
+  }
+}
+
 function ensureSelfieColumn(sheet: ExcelJS.Worksheet, columns: DailyColumns): DailyColumns {
-  if (columns.selfieCol) return columns;
+  if (columns.selfieCol) {
+    sheet.getColumn(columns.selfieCol).width = Math.max(
+      sheet.getColumn(columns.selfieCol).width ?? 0,
+      24,
+    );
+    sheet.getRow(columns.headerRow).getCell(columns.selfieCol).border = {
+      ...(sheet.getRow(columns.headerRow).getCell(columns.selfieCol).border ?? {}),
+      ...SELFIE_BORDER,
+    };
+    return columns;
+  }
 
   const header = sheet.getRow(columns.headerRow);
-  const col = Math.max(findLastUsedColumn(sheet), columns.cpCol, columns.totalCol) + 1;
+  const col =
+    Math.max(findLastUsedColumn(sheet, columns.headerRow), columns.cpCol, columns.totalCol) + 1;
   const headerCell = header.getCell(col);
   const sourceHeader = header.getCell(columns.cpCol);
   headerCell.value = "Selfies";
   headerCell.style = { ...sourceHeader.style };
-  sheet.getColumn(col).width = Math.max(sheet.getColumn(col).width ?? 0, 12);
+  headerCell.border = { ...(headerCell.border ?? {}), ...SELFIE_BORDER };
+  sheet.getColumn(col).width = Math.max(sheet.getColumn(col).width ?? 0, 24);
   header.commit();
 
   return { ...columns, selfieCol: col };
 }
 
-function findLastUsedColumn(sheet: ExcelJS.Worksheet): number {
+function findLastUsedColumn(sheet: ExcelJS.Worksheet, startRow = 1): number {
   let lastUsedCol = 0;
-  for (let rowNumber = 1; rowNumber <= Math.min(sheet.rowCount, 12); rowNumber++) {
+  for (
+    let rowNumber = startRow;
+    rowNumber <= Math.min(sheet.rowCount, startRow + 11);
+    rowNumber++
+  ) {
     const row = sheet.getRow(rowNumber);
     row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
       if (cellText(cell).trim()) lastUsedCol = Math.max(lastUsedCol, colNumber);
@@ -805,7 +908,12 @@ function clearDailyCells(row: ExcelJS.Row, columns: DailyColumns) {
     columns.cpCol,
     columns.selfieCol,
   ].filter((col): col is number => Boolean(col))) {
-    row.getCell(col).value = null;
+    const cell = row.getCell(col);
+    cell.value = null;
+    if (col === columns.selfieCol) {
+      cell.fill = undefined as unknown as ExcelJS.Fill;
+      cell.border = { ...(cell.border ?? {}), ...SELFIE_BORDER };
+    }
   }
 }
 
@@ -822,6 +930,27 @@ function styleDailyCells(row: ExcelJS.Row, columns: DailyColumns) {
     const cell = row.getCell(col);
     cell.alignment = { ...(cell.alignment ?? {}), horizontal: "center", vertical: "middle" };
   }
+}
+
+function formatSelfieText(count: number): string {
+  if (count <= 0) return "0 selfies 0 locations";
+  if (count === 1) return "1 selfie with location";
+  return `${count} selfies with locations`;
+}
+
+function styleSelfieCell(cell: ExcelJS.Cell, count: number) {
+  cell.alignment = { ...(cell.alignment ?? {}), horizontal: "center", vertical: "middle" };
+  cell.border = { ...(cell.border ?? {}), ...SELFIE_BORDER };
+  if (count <= 0) {
+    cell.fill = SELFIE_ZERO_FILL;
+    return;
+  }
+  if (count <= 11) {
+    cell.fill = SELFIE_WARNING_FILL;
+    return;
+  }
+
+  cell.fill = undefined as unknown as ExcelJS.Fill;
 }
 
 function cellText(cell: ExcelJS.Cell): string {
