@@ -9,6 +9,8 @@ export interface DailyReportResult {
     callRows: number;
     faceToFaceRows: number;
     contactPointRows: number;
+    selfieFiles: number;
+    selfieRows: number;
     templateRows: number;
   };
   blob: Blob;
@@ -37,12 +39,14 @@ export interface BulkDailyReportResult {
 interface CallSummary {
   code: string;
   name: string;
+  dates: Set<string>;
   planned: number;
   unplanned: number;
   morning: number;
   evening: number;
   total: number;
   cpTime: string;
+  selfies: number;
 }
 
 interface DailyColumns {
@@ -55,6 +59,7 @@ interface DailyColumns {
   eveningCol: number;
   totalCol: number;
   cpCol: number;
+  selfieCol?: number;
   teamCol?: number;
 }
 
@@ -79,9 +84,24 @@ interface DailySheetProcessResult {
   preview: { name: string; total: number }[];
 }
 
+interface SelfieEmployeeSummary {
+  code: string;
+  name: string;
+  nameKey: string;
+  dateCounts: Map<string, number>;
+}
+
+interface SelfieColumns {
+  headerRow: number;
+  messageTimeCol: number;
+  messageTypeCol: number;
+  messageBodyCol: number;
+}
+
 const CALL_HEADER_HINTS: Record<string, string[]> = {
   code: ["emp. id", "emp id", "employee id", "employee code"],
   name: ["employee name", "name"],
+  date: ["date", "call date", "start date", "activity date"],
   startTime: ["start time"],
   eventType: ["event type"],
   meetingType: ["meeting type"],
@@ -99,13 +119,22 @@ const TEMPLATE_HEADER_HINTS: Record<string, string[]> = {
   evening: ["eve", "evening"],
   total: ["total"],
   cp: ["cp"],
+  selfies: ["selfies", "selfie", "images", "image"],
+};
+
+const SELFIE_HEADER_HINTS: Record<string, string[]> = {
+  messageTime: ["message time", "time", "date time", "date"],
+  messageType: ["message type", "type"],
+  messageBody: ["message body", "body", "message", "chat"],
 };
 
 export async function processDailyReport(
   callLogFile: File | File[],
   templateFile: File,
+  selfieFile?: File | File[],
 ): Promise<DailyReportResult> {
   const callLog = await readCallLogs(callLogFile);
+  await applySelfiesToCallLog(callLog, selfieFile);
   const templateWorkbook = new ExcelJS.Workbook();
   await templateWorkbook.xlsx.load(await templateFile.arrayBuffer());
   const sheet = selectDailyTemplateSheet(templateWorkbook, callLog);
@@ -117,9 +146,17 @@ export async function processDailyReport(
 export async function processBulkDailyReports(
   callLogFile: File | File[],
   teamsWorkbookFile: File,
+  selfieFileOrProgress?:
+    | File
+    | File[]
+    | ((progress: { current: number; total: number; teamName: string }) => void),
   onProgress?: (progress: { current: number; total: number; teamName: string }) => void,
 ): Promise<BulkDailyReportResult> {
   const callLog = await readCallLogs(callLogFile);
+  const selfieFile = typeof selfieFileOrProgress === "function" ? undefined : selfieFileOrProgress;
+  const progressCallback =
+    typeof selfieFileOrProgress === "function" ? selfieFileOrProgress : onProgress;
+  await applySelfiesToCallLog(callLog, selfieFile);
   const teamsWorkbook = new ExcelJS.Workbook();
   await teamsWorkbook.xlsx.load(await teamsWorkbookFile.arrayBuffer());
   const allTeamSources = findDailyTeamSources(teamsWorkbook);
@@ -135,7 +172,11 @@ export async function processBulkDailyReports(
 
   for (let index = 0; index < teamSources.length; index++) {
     const source = teamSources[index];
-    onProgress?.({ current: index + 1, total: teamSources.length, teamName: source.teamName });
+    progressCallback?.({
+      current: index + 1,
+      total: teamSources.length,
+      teamName: source.teamName,
+    });
 
     try {
       const sheet = teamsWorkbook.getWorksheet(source.sheetName);
@@ -204,6 +245,8 @@ async function processDailyWorkbook(
       callRows: callLog.callRows,
       faceToFaceRows: callLog.faceToFaceRows,
       contactPointRows: callLog.contactPointRows,
+      selfieFiles: callLog.selfieFileCount,
+      selfieRows: callLog.selfieRows,
       templateRows: result.totalEmployees,
     },
     blob,
@@ -222,6 +265,7 @@ function processDailySheet(
 ): DailySheetProcessResult {
   const columns = findTemplateColumns(sheet);
   if (!columns) throw new Error("Template columns were not found.");
+  const outputColumns = callLog.selfieFileCount > 0 ? ensureSelfieColumn(sheet, columns) : columns;
 
   const summariesByCode = new Map(callLog.summaries.map((item) => [item.code, item]));
   const unmatched = new Set(callLog.summaries.map((item) => `${item.code} ${item.name}`));
@@ -233,27 +277,28 @@ function processDailySheet(
     const row = sheet.getRow(rowNumber);
     if (!shouldProcessRow(row)) continue;
 
-    const code = normalizeEmployeeCode(cellText(row.getCell(columns.codeCol)));
-    const name = cellText(row.getCell(columns.nameCol));
+    const code = normalizeEmployeeCode(cellText(row.getCell(outputColumns.codeCol)));
+    const name = cellText(row.getCell(outputColumns.nameCol));
     if (!code) continue;
     totalEmployees++;
 
     const match = summariesByCode.get(code);
     if (!match) {
-      clearDailyCells(row, columns);
+      clearDailyCells(row, outputColumns);
       continue;
     }
 
     matchedEmployees++;
     unmatched.delete(`${match.code} ${match.name}`);
-    row.getCell(columns.plannedCol).value = match.planned || 0;
-    row.getCell(columns.unplannedCol).value = match.unplanned || 0;
-    row.getCell(columns.morningCol).value = match.morning || 0;
-    row.getCell(columns.eveningCol).value = match.evening || 0;
-    row.getCell(columns.totalCol).value = match.total || 0;
-    row.getCell(columns.cpCol).value = match.cpTime || null;
+    row.getCell(outputColumns.plannedCol).value = match.planned || 0;
+    row.getCell(outputColumns.unplannedCol).value = match.unplanned || 0;
+    row.getCell(outputColumns.morningCol).value = match.morning || 0;
+    row.getCell(outputColumns.eveningCol).value = match.evening || 0;
+    row.getCell(outputColumns.totalCol).value = match.total || 0;
+    row.getCell(outputColumns.cpCol).value = match.cpTime || null;
+    if (outputColumns.selfieCol) row.getCell(outputColumns.selfieCol).value = match.selfies || 0;
 
-    styleDailyCells(row, columns);
+    styleDailyCells(row, outputColumns);
     if (match.total > 0) preview.push({ name: name || match.name, total: match.total });
   }
 
@@ -368,6 +413,8 @@ async function readCallLog(file: File): Promise<{
   faceToFaceRows: number;
   contactPointRows: number;
   teamNames: string[];
+  selfieFileCount: number;
+  selfieRows: number;
 }> {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(await file.arrayBuffer());
@@ -382,6 +429,7 @@ async function readCallLog(file: File): Promise<{
 
   const codeCol = findHeader(headers, CALL_HEADER_HINTS.code);
   const nameCol = findHeader(headers, CALL_HEADER_HINTS.name);
+  const dateCol = findHeader(headers, CALL_HEADER_HINTS.date, false);
   const startTimeCol = findHeader(headers, CALL_HEADER_HINTS.startTime);
   const eventTypeCol = findHeader(headers, CALL_HEADER_HINTS.eventType);
   const meetingTypeCol = findHeader(headers, CALL_HEADER_HINTS.meetingType);
@@ -416,17 +464,23 @@ async function readCallLog(file: File): Promise<{
       summary = {
         code,
         name,
+        dates: new Set<string>(),
         planned: 0,
         unplanned: 0,
         morning: 0,
         evening: 0,
         total: 0,
         cpTime: "",
+        selfies: 0,
       };
       byCode.set(code, summary);
     }
 
     callRows++;
+    const dateKey = dateCol
+      ? normalizeDateKey(row.getCell(dateCol).value, cellText(row.getCell(dateCol)))
+      : "";
+    if (dateKey) summary.dates.add(dateKey);
     if (meetingType === "contact point") {
       contactPointRows++;
       if (!summary.cpTime && startTime) summary.cpTime = startTime;
@@ -448,6 +502,8 @@ async function readCallLog(file: File): Promise<{
     faceToFaceRows,
     contactPointRows,
     teamNames: [...teamNames.values()],
+    selfieFileCount: 0,
+    selfieRows: 0,
   };
 }
 
@@ -457,6 +513,8 @@ async function readCallLogs(files: File | File[]): Promise<{
   faceToFaceRows: number;
   contactPointRows: number;
   teamNames: string[];
+  selfieFileCount: number;
+  selfieRows: number;
 }> {
   const fileList = Array.isArray(files) ? files : [files];
   if (!fileList.length) throw new Error("Please upload at least one call log Excel file.");
@@ -480,10 +538,14 @@ async function readCallLogs(files: File | File[]): Promise<{
     for (const summary of callLog.summaries) {
       const existing = mergedByCode.get(summary.code);
       if (!existing) {
-        mergedByCode.set(summary.code, { ...summary });
+        mergedByCode.set(summary.code, {
+          ...summary,
+          dates: new Set(summary.dates),
+        });
         continue;
       }
 
+      summary.dates.forEach((date) => existing.dates.add(date));
       existing.planned += summary.planned;
       existing.unplanned += summary.unplanned;
       existing.morning += summary.morning;
@@ -499,7 +561,149 @@ async function readCallLogs(files: File | File[]): Promise<{
     faceToFaceRows,
     contactPointRows,
     teamNames: [...teamNames.values()],
+    selfieFileCount: 0,
+    selfieRows: 0,
   };
+}
+
+async function applySelfiesToCallLog(
+  callLog: Awaited<ReturnType<typeof readCallLogs>>,
+  selfieFiles?: File | File[],
+) {
+  const fileList = selfieFiles ? (Array.isArray(selfieFiles) ? selfieFiles : [selfieFiles]) : [];
+  callLog.selfieFileCount = fileList.length;
+  callLog.selfieRows = 0;
+  for (const summary of callLog.summaries) summary.selfies = 0;
+  if (!fileList.length) return;
+
+  const selfieData = await readSelfieFiles(fileList);
+  callLog.selfieRows = selfieData.imageRows;
+
+  for (const summary of callLog.summaries) {
+    const source =
+      selfieData.byCode.get(summary.code) || selfieData.byName.get(personNameKey(summary.name));
+    if (!source) continue;
+
+    let selfies = 0;
+    for (const date of summary.dates) {
+      selfies += source.dateCounts.get(date) ?? 0;
+    }
+    summary.selfies = selfies;
+  }
+}
+
+async function readSelfieFiles(files: File[]): Promise<{
+  byCode: Map<string, SelfieEmployeeSummary>;
+  byName: Map<string, SelfieEmployeeSummary>;
+  imageRows: number;
+}> {
+  const byCode = new Map<string, SelfieEmployeeSummary>();
+  const byName = new Map<string, SelfieEmployeeSummary>();
+  let imageRows = 0;
+
+  for (const file of files) {
+    const employee = parseSelfieEmployeeFromFileName(file.name);
+    if (!employee.code && !employee.nameKey) continue;
+
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(await file.arrayBuffer());
+
+    for (const sheet of workbook.worksheets) {
+      const columns = findSelfieColumns(sheet);
+      if (!columns) continue;
+
+      for (let rowNumber = columns.headerRow + 1; rowNumber <= sheet.rowCount; rowNumber++) {
+        const row = sheet.getRow(rowNumber);
+        const body = cellText(row.getCell(columns.messageBodyCol));
+        const type = columns.messageTypeCol ? cellText(row.getCell(columns.messageTypeCol)) : "";
+        if (!isImageMessage(body, type)) continue;
+
+        const dateKey = normalizeDateKey(
+          row.getCell(columns.messageTimeCol).value,
+          cellText(row.getCell(columns.messageTimeCol)),
+        );
+        if (!dateKey) continue;
+
+        imageRows++;
+        const summary = getSelfieSummary(byCode, byName, employee);
+        summary.dateCounts.set(dateKey, (summary.dateCounts.get(dateKey) ?? 0) + 1);
+      }
+    }
+  }
+
+  return { byCode, byName, imageRows };
+}
+
+function getSelfieSummary(
+  byCode: Map<string, SelfieEmployeeSummary>,
+  byName: Map<string, SelfieEmployeeSummary>,
+  employee: { code: string; name: string; nameKey: string },
+): SelfieEmployeeSummary {
+  const existing =
+    (employee.code && byCode.get(employee.code)) ||
+    (employee.nameKey && byName.get(employee.nameKey));
+  if (existing) return existing;
+
+  const summary: SelfieEmployeeSummary = {
+    code: employee.code,
+    name: employee.name,
+    nameKey: employee.nameKey,
+    dateCounts: new Map<string, number>(),
+  };
+  if (employee.code) byCode.set(employee.code, summary);
+  if (employee.nameKey) byName.set(employee.nameKey, summary);
+  return summary;
+}
+
+function findSelfieColumns(sheet: ExcelJS.Worksheet): SelfieColumns | null {
+  for (let rowNumber = 1; rowNumber <= Math.min(sheet.rowCount, 20); rowNumber++) {
+    const row = sheet.getRow(rowNumber);
+    const headers = new Map<string, number>();
+    for (let c = 1; c <= sheet.columnCount; c++) {
+      headers.set(normalize(cellText(row.getCell(c))), c);
+    }
+
+    const messageTimeCol = findHeader(headers, SELFIE_HEADER_HINTS.messageTime, false);
+    const messageTypeCol = findHeader(headers, SELFIE_HEADER_HINTS.messageType, false);
+    const messageBodyCol = findHeader(headers, SELFIE_HEADER_HINTS.messageBody, false);
+
+    if (messageTimeCol && messageBodyCol) {
+      return {
+        headerRow: rowNumber,
+        messageTimeCol,
+        messageTypeCol,
+        messageBodyCol,
+      };
+    }
+  }
+
+  return null;
+}
+
+function parseSelfieEmployeeFromFileName(fileName: string): {
+  code: string;
+  name: string;
+  nameKey: string;
+} {
+  const withoutExtension = fileName.replace(/\.[^.]+$/i, "");
+  const bracketValue = withoutExtension.match(/\[\s*([^\]]+)\s*\]/)?.[1] ?? withoutExtension;
+  const code = normalizeEmployeeCode(bracketValue);
+  const name = bracketValue
+    .replace(/\d+/g, " ")
+    .replace(/[-_()[\]]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return {
+    code,
+    name,
+    nameKey: personNameKey(name),
+  };
+}
+
+function isImageMessage(body: string, type: string): boolean {
+  const normalizedBody = normalize(body);
+  const normalizedType = normalize(type);
+  return normalizedBody.includes("image") || normalizedType === "image";
 }
 
 function findTemplateColumns(sheet: ExcelJS.Worksheet, required = true): DailyColumns | null {
@@ -519,6 +723,7 @@ function findTemplateColumns(sheet: ExcelJS.Worksheet, required = true): DailyCo
     const eveningCol = findHeader(labels, TEMPLATE_HEADER_HINTS.evening, false);
     const totalCol = findHeader(labels, TEMPLATE_HEADER_HINTS.total, false);
     const cpCol = findHeader(labels, TEMPLATE_HEADER_HINTS.cp, false);
+    const selfieCol = findHeader(labels, TEMPLATE_HEADER_HINTS.selfies, false);
 
     if (
       codeCol &&
@@ -540,6 +745,7 @@ function findTemplateColumns(sheet: ExcelJS.Worksheet, required = true): DailyCo
         eveningCol,
         totalCol,
         cpCol,
+        selfieCol: selfieCol || undefined,
         teamCol: teamCol || undefined,
       };
     }
@@ -549,6 +755,32 @@ function findTemplateColumns(sheet: ExcelJS.Worksheet, required = true): DailyCo
   throw new Error(
     "Template columns were not found. Required: Employee Code, Name, Planned, Unplanned, Mor, Eve, Total, Cp.",
   );
+}
+
+function ensureSelfieColumn(sheet: ExcelJS.Worksheet, columns: DailyColumns): DailyColumns {
+  if (columns.selfieCol) return columns;
+
+  const header = sheet.getRow(columns.headerRow);
+  const col = Math.max(findLastUsedColumn(sheet), columns.cpCol, columns.totalCol) + 1;
+  const headerCell = header.getCell(col);
+  const sourceHeader = header.getCell(columns.cpCol);
+  headerCell.value = "Selfies";
+  headerCell.style = { ...sourceHeader.style };
+  sheet.getColumn(col).width = Math.max(sheet.getColumn(col).width ?? 0, 12);
+  header.commit();
+
+  return { ...columns, selfieCol: col };
+}
+
+function findLastUsedColumn(sheet: ExcelJS.Worksheet): number {
+  let lastUsedCol = 0;
+  for (let rowNumber = 1; rowNumber <= Math.min(sheet.rowCount, 12); rowNumber++) {
+    const row = sheet.getRow(rowNumber);
+    row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+      if (cellText(cell).trim()) lastUsedCol = Math.max(lastUsedCol, colNumber);
+    });
+  }
+  return lastUsedCol || sheet.columnCount;
 }
 
 function findHeader(headers: Map<string, number>, hints: string[], required = true): number {
@@ -571,7 +803,8 @@ function clearDailyCells(row: ExcelJS.Row, columns: DailyColumns) {
     columns.eveningCol,
     columns.totalCol,
     columns.cpCol,
-  ]) {
+    columns.selfieCol,
+  ].filter((col): col is number => Boolean(col))) {
     row.getCell(col).value = null;
   }
 }
@@ -584,7 +817,8 @@ function styleDailyCells(row: ExcelJS.Row, columns: DailyColumns) {
     columns.eveningCol,
     columns.totalCol,
     columns.cpCol,
-  ]) {
+    columns.selfieCol,
+  ].filter((col): col is number => Boolean(col))) {
     const cell = row.getCell(col);
     cell.alignment = { ...(cell.alignment ?? {}), horizontal: "center", vertical: "middle" };
   }
@@ -627,6 +861,35 @@ function normalizeEmployeeCode(value: string): string {
       .match(/\d+/g)
       ?.join("") ?? "";
   return digits.length >= 3 ? digits : "";
+}
+
+function personNameKey(value: string): string {
+  return normalize(value)
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\b(mr|mrs|ms|dr|mio|asm|hos|dbu|smio|sm)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeDateKey(value: unknown, text: string): string {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toISOString().slice(0, 10);
+  }
+
+  const raw = String(text ?? "").trim();
+  const iso = raw.match(/\b(\d{4})-(\d{1,2})-(\d{1,2})\b/);
+  if (iso) return `${iso[1]}-${iso[2].padStart(2, "0")}-${iso[3].padStart(2, "0")}`;
+
+  const slash = raw.match(/\b(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})\b/);
+  if (slash) {
+    const year = slash[3].length === 2 ? `20${slash[3]}` : slash[3];
+    return `${year}-${slash[2].padStart(2, "0")}-${slash[1].padStart(2, "0")}`;
+  }
+
+  const parsed = new Date(raw);
+  if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
+  return "";
 }
 
 function formatTime(value: unknown, text: string): string {

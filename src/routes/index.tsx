@@ -692,6 +692,7 @@ function HomePage() {
       const bulkResult = await processBulkDailyReports(
         callLogFiles,
         dailyTemplateFile,
+        dailySelfieFiles.length ? dailySelfieFiles : undefined,
         (status) => {
           setBulkDailyProgress(Math.round((status.current / Math.max(status.total, 1)) * 100));
           setBulkDailyProgressLabel(
@@ -727,7 +728,11 @@ function HomePage() {
       }
 
       setBulkDailyProgressLabel("Preparing report preview...");
-      const result = await processDailyReport(callLogFiles, dailyTemplateFile);
+      const result = await processDailyReport(
+        callLogFiles,
+        dailyTemplateFile,
+        dailySelfieFiles.length ? dailySelfieFiles : undefined,
+      );
       setDailyReport(result);
       await saveReportHistoryAndDatabase({
         id: crypto.randomUUID(),
@@ -1111,9 +1116,9 @@ function HomePage() {
           description="Upload one sample workbook and one or more call log Excel files. No PDF upload is required."
         />
 
-        <main className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
+        <main className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_260px] 2xl:grid-cols-[minmax(0,1fr)_280px]">
           <div className="space-y-6">
-            <div className="grid gap-4 lg:grid-cols-3">
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               <UploadCard
                 step={1}
                 title="Daily Report Sample"
@@ -1289,8 +1294,8 @@ function HomePage() {
                   </h2>
                   <p className="text-sm text-muted-foreground">
                     Data is matched by Employee Code only, then Planned, Unplanned, Mor, Eve, Total,
-                    and Cp are filled in the sample file. Selfies Excel upload is ready for the next
-                    function and will be connected after its matching rules are finalized.
+                    Cp, and Selfies are filled in the sample file. Selfies are counted from WhatsApp
+                    export image rows only for the dates found in the call log.
                   </p>
                 </div>
                 <Button
@@ -1363,6 +1368,8 @@ function HomePage() {
                       <Stat label="Call log rows" value={dailyReport.debug.callRows} />
                       <Stat label="Face-to-face calls" value={dailyReport.debug.faceToFaceRows} />
                       <Stat label="Contact points" value={dailyReport.debug.contactPointRows} />
+                      <Stat label="Selfie files" value={dailyReport.debug.selfieFiles} />
+                      <Stat label="Selfie images" value={dailyReport.debug.selfieRows} />
                     </div>
 
                     {dailyReport.preview.length > 0 && (
@@ -1472,8 +1479,8 @@ function HomePage() {
               <div className="text-xs font-bold uppercase text-primary">Match rule</div>
               <p className="mt-2 text-sm text-muted-foreground">
                 The sample file must include: Employee Code, Name, Planned, Unplanned, Mor, Eve,
-                Total, and Cp. For all teams, select every team's call-log file in the Call Log
-                Excel upload.
+                Total, and Cp. Add WhatsApp export workbooks in Selfies Excel to count image rows by
+                employee and call-log date.
               </p>
             </Card>
           </aside>
@@ -1499,7 +1506,7 @@ function HomePage() {
           description="Add coverage columns to a sample employee file."
         />
 
-        <main className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
+        <main className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_260px] 2xl:grid-cols-[minmax(0,1fr)_280px]">
           <div className="space-y-6">
             <div className="grid gap-4 sm:grid-cols-2">
               <UploadCard
@@ -1768,7 +1775,7 @@ function HomePage() {
           description="Monthly call log summary by employee."
         />
 
-        <main className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
+        <main className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_260px] 2xl:grid-cols-[minmax(0,1fr)_280px]">
           <div className="space-y-6">
             <div className="grid gap-4 sm:grid-cols-2">
               <UploadCard
@@ -2173,7 +2180,7 @@ function HomePage() {
         description="PDF to Excel report workbench."
       />
 
-      <main className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
+      <main className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_260px] 2xl:grid-cols-[minmax(0,1fr)_280px]">
         <div className="space-y-6">
           <div className="grid gap-4 sm:grid-cols-2">
             <UploadCard
@@ -2253,7 +2260,7 @@ function HomePage() {
                       Clear All
                     </Button>
                   </div>
-                  <div className="max-h-44 space-y-1.5 overflow-y-auto pr-1">
+                  <div className="report-card-scroll max-h-44 space-y-1.5 overflow-y-auto pr-1">
                     {pdfFiles.map((f) => (
                       <FilePill
                         key={f.name}
@@ -4361,25 +4368,34 @@ function UploadCard({
   children: React.ReactNode;
 }) {
   return (
-    <Card className="border-white/45 bg-[var(--gradient-card)] p-4 shadow-[var(--shadow-soft)] transition-shadow hover:shadow-[var(--shadow-elegant)] sm:p-5">
-      <div className="mb-4 flex flex-col items-start justify-between gap-3 sm:flex-row">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 text-xs font-bold uppercase text-primary">
+    <Card className="flex min-h-[16rem] flex-col border-white/45 bg-[var(--gradient-card)] p-4 shadow-[var(--shadow-soft)] transition-shadow hover:shadow-[var(--shadow-elegant)] sm:p-5">
+      <div className="mb-4 space-y-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex min-h-9 items-center gap-2 text-xs font-bold uppercase text-primary">
             Step {step}
             {ready && <Check className="h-3.5 w-3.5 text-success" />}
           </div>
-          <h2 className="mt-1 flex items-center gap-2 text-base font-semibold text-foreground sm:text-lg">
-            <span className="flex h-7 w-7 items-center justify-center rounded-xl bg-card text-primary shadow-[var(--shadow-inset)]">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onClick}
+            className="min-h-9 shrink-0 whitespace-nowrap px-4"
+          >
+            <Upload className="mr-1.5 h-3.5 w-3.5" />
+            Upload
+          </Button>
+        </div>
+        <div className="min-w-0">
+          <h2 className="flex min-w-0 items-start gap-3 text-base font-semibold leading-tight text-foreground sm:text-lg 2xl:text-xl">
+            <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-card text-primary shadow-[var(--shadow-inset)]">
               {icon}
             </span>
-            <span className="min-w-0 break-words">{title}</span>
+            <span className="min-w-0 whitespace-normal break-words">{title}</span>
           </h2>
-          <p className="text-sm text-muted-foreground">{subtitle}</p>
+          <p className="mt-2 max-w-[28rem] text-sm leading-relaxed text-muted-foreground sm:text-base">
+            {subtitle}
+          </p>
         </div>
-        <Button variant="outline" size="sm" onClick={onClick} className="w-full sm:w-auto">
-          <Upload className="mr-1.5 h-3.5 w-3.5" />
-          Upload
-        </Button>
       </div>
       <div
         role={ready ? undefined : "button"}
@@ -4392,7 +4408,7 @@ function UploadCard({
             onClick();
           }
         }}
-        className={`min-h-24 rounded-2xl border p-3 shadow-[var(--shadow-inset)] transition ${
+        className={`report-card-scroll mt-auto min-h-28 max-h-52 overflow-y-auto rounded-2xl border p-3 shadow-[var(--shadow-inset)] transition sm:min-h-32 ${
           ready ? "border-success/35 bg-success/5" : "border-white/40 bg-muted/35"
         } ${ready ? "" : "cursor-pointer hover:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"}`}
       >

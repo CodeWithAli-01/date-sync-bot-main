@@ -310,6 +310,15 @@
   .dashboard-logs-scroll::-webkit-scrollbar {
     display: none;
   }
+
+  .report-card-scroll {
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .report-card-scroll::-webkit-scrollbar {
+    display: none;
+  }
 }
 
 @media (min-width: 640px) {
