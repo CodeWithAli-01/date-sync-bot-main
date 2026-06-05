@@ -2814,7 +2814,7 @@ function UserAvatar({
     <Avatar
       className={`bg-primary text-primary-foreground shadow-[var(--shadow-soft)] ${className}`}
     >
-      {photo && <AvatarImage src={photo} alt={displayName} className="object-cover" />}
+      {photo && <AvatarImage src={photo} alt={displayName} className="object-contain" />}
       <AvatarFallback className="bg-primary text-sm font-bold text-primary-foreground">
         {getUserInitials(displayName)}
       </AvatarFallback>
@@ -2901,8 +2901,11 @@ async function cropProfileImage(
   const context = canvas.getContext("2d");
   if (!context) throw new Error("Canvas is not available.");
 
-  const coverScale = Math.max(previewSize / image.naturalWidth, previewSize / image.naturalHeight);
-  const drawScale = coverScale * crop.zoom * (outputSize / previewSize);
+  const containScale = Math.min(
+    previewSize / image.naturalWidth,
+    previewSize / image.naturalHeight,
+  );
+  const drawScale = containScale * crop.zoom * (outputSize / previewSize);
   const width = image.naturalWidth * drawScale;
   const height = image.naturalHeight * drawScale;
   const offsetX = crop.x * (outputSize / previewSize);
@@ -3119,15 +3122,16 @@ function ProfilePage({
             </DialogHeader>
             {cropImage && (
               <div className="space-y-5">
-                <div className="mx-auto h-60 w-60 overflow-hidden rounded-full bg-muted shadow-[var(--shadow-inset)]">
+                <div className="relative mx-auto h-60 w-60 overflow-hidden rounded-2xl bg-muted shadow-[var(--shadow-inset)]">
                   <img
                     src={cropImage}
                     alt="Profile crop preview"
-                    className="h-full w-full object-cover"
+                    className="h-full w-full object-contain"
                     style={{
                       transform: `translate(${cropX}px, ${cropY}px) scale(${cropZoom})`,
                     }}
                   />
+                  <div className="pointer-events-none absolute inset-4 rounded-full border border-white/80 shadow-[0_0_0_999px_rgba(0,0,0,0.08)]" />
                 </div>
 
                 <CropSlider
@@ -3155,7 +3159,7 @@ function ProfilePage({
                   onChange={setCropY}
                 />
 
-                <div className="grid gap-2 sm:grid-cols-3">
+                <div className="grid gap-2 sm:grid-cols-4">
                   <Button
                     type="button"
                     variant="outline"
@@ -3165,7 +3169,18 @@ function ProfilePage({
                       setCropY(0);
                     }}
                   >
-                    Reset
+                    Fit
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      setCropZoom(1.35);
+                      setCropX(0);
+                      setCropY(0);
+                    }}
+                  >
+                    Fill
                   </Button>
                   <Button type="button" variant="outline" onClick={() => setCropImage(null)}>
                     Cancel
