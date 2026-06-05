@@ -97,10 +97,10 @@ const TEMPLATE_HEADER_HINTS: Record<string, string[]> = {
 };
 
 export async function processDailyReport(
-  callLogFile: File,
+  callLogFile: File | File[],
   templateFile: File,
 ): Promise<DailyReportResult> {
-  const callLog = await readCallLog(callLogFile);
+  const callLog = await readCallLogs(callLogFile);
   const templateWorkbook = new ExcelJS.Workbook();
   await templateWorkbook.xlsx.load(await templateFile.arrayBuffer());
   const sheet = selectDailyTemplateSheet(templateWorkbook, callLog);
@@ -110,11 +110,11 @@ export async function processDailyReport(
 }
 
 export async function processBulkDailyReports(
-  callLogFile: File,
+  callLogFile: File | File[],
   teamsWorkbookFile: File,
   onProgress?: (progress: { current: number; total: number; teamName: string }) => void,
 ): Promise<BulkDailyReportResult> {
-  const callLog = await readCallLog(callLogFile);
+  const callLog = await readCallLogs(callLogFile);
   const teamsWorkbook = new ExcelJS.Workbook();
   await teamsWorkbook.xlsx.load(await teamsWorkbookFile.arrayBuffer());
   const allTeamSources = findDailyTeamSources(teamsWorkbook);
@@ -186,7 +186,7 @@ export async function processBulkDailyReports(
 }
 
 async function processDailyWorkbook(
-  callLog: Awaited<ReturnType<typeof readCallLog>>,
+  callLog: Awaited<ReturnType<typeof readCallLogs>>,
   templateWorkbook: ExcelJS.Workbook,
   sheet: ExcelJS.Worksheet,
   templateFileName: string,
@@ -305,7 +305,7 @@ function filterTeamSourcesByCallLogTeams(
 
 function selectDailyTemplateSheet(
   workbook: ExcelJS.Workbook,
-  callLog: Awaited<ReturnType<typeof readCallLog>>,
+  callLog: Awaited<ReturnType<typeof readCallLogs>>,
 ): ExcelJS.Worksheet | undefined {
   const templateSheets = workbook.worksheets.filter((sheet) => hasTemplateColumns(sheet));
   if (!templateSheets.length) return workbook.worksheets[0];
@@ -512,6 +512,57 @@ async function readCallLog(file: File): Promise<{
   };
 }
 
+async function readCallLogs(files: File | File[]): Promise<{
+  summaries: CallSummary[];
+  callRows: number;
+  faceToFaceRows: number;
+  contactPointRows: number;
+  teamNames: string[];
+}> {
+  const fileList = Array.isArray(files) ? files : [files];
+  if (!fileList.length) throw new Error("Please upload at least one call log Excel file.");
+
+  const mergedByCode = new Map<string, CallSummary>();
+  const teamNames = new Map<string, string>();
+  let callRows = 0;
+  let faceToFaceRows = 0;
+  let contactPointRows = 0;
+
+  for (const file of fileList) {
+    const callLog = await readCallLog(file);
+    callRows += callLog.callRows;
+    faceToFaceRows += callLog.faceToFaceRows;
+    contactPointRows += callLog.contactPointRows;
+
+    for (const teamName of callLog.teamNames) {
+      teamNames.set(teamKey(teamName), teamName);
+    }
+
+    for (const summary of callLog.summaries) {
+      const existing = mergedByCode.get(summary.code);
+      if (!existing) {
+        mergedByCode.set(summary.code, { ...summary });
+        continue;
+      }
+
+      existing.planned += summary.planned;
+      existing.unplanned += summary.unplanned;
+      existing.morning += summary.morning;
+      existing.evening += summary.evening;
+      existing.total += summary.total;
+      if (!existing.cpTime && summary.cpTime) existing.cpTime = summary.cpTime;
+    }
+  }
+
+  return {
+    summaries: [...mergedByCode.values()],
+    callRows,
+    faceToFaceRows,
+    contactPointRows,
+    teamNames: [...teamNames.values()],
+  };
+}
+
 function findTemplateColumns(sheet: ExcelJS.Worksheet, required = true): DailyColumns | null {
   for (let rowNumber = 1; rowNumber <= Math.min(sheet.rowCount, 12); rowNumber++) {
     const row = sheet.getRow(rowNumber);
@@ -636,7 +687,7 @@ function normalizeEmployeeCode(value: string): string {
     String(value ?? "")
       .match(/\d+/g)
       ?.join("") ?? "";
-  return digits.length >= 4 ? digits : "";
+  return digits.length >= 3 ? digits : "";
 }
 
 function formatTime(value: unknown, text: string): string {

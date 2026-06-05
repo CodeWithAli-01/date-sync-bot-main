@@ -173,7 +173,7 @@ function HomePage() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyPreview, setHistoryPreview] = useState<SheetPreview | null>(null);
   const [historyPreviewLoading, setHistoryPreviewLoading] = useState(false);
-  const [callLogFile, setCallLogFile] = useState<File | null>(null);
+  const [callLogFiles, setCallLogFiles] = useState<File[]>([]);
   const [dailyTemplateFile, setDailyTemplateFile] = useState<File | null>(null);
   const [dailyProcessing, setDailyProcessing] = useState(false);
   const [dailyReport, setDailyReport] = useState<DailyReportResult | null>(null);
@@ -430,7 +430,7 @@ function HomePage() {
     })();
   }, [authUser, refreshHistory]);
 
-  const canProcessDaily = Boolean(callLogFile) && Boolean(dailyTemplateFile) && !dailyProcessing;
+  const canProcessDaily = callLogFiles.length > 0 && Boolean(dailyTemplateFile) && !dailyProcessing;
   const canProcessCoverage =
     Boolean(coverageSourceFile) && Boolean(coverageTemplateFile) && !coverageProcessing;
   const canProcessMonthlyPlanned =
@@ -616,8 +616,8 @@ function HomePage() {
   };
 
   const onDailyProcess = async () => {
-    if (!callLogFile) {
-      toast.error("Please upload the call log Excel file.");
+    if (!callLogFiles.length) {
+      toast.error("Please upload at least one call log Excel file.");
       return;
     }
     if (!dailyTemplateFile) {
@@ -632,12 +632,16 @@ function HomePage() {
     setBulkDailyProgress(0);
     setBulkDailyProgressLabel("Detecting teams...");
     try {
-      const bulkResult = await processBulkDailyReports(callLogFile, dailyTemplateFile, (status) => {
-        setBulkDailyProgress(Math.round((status.current / Math.max(status.total, 1)) * 100));
-        setBulkDailyProgressLabel(
-          `Generating ${status.teamName} (${status.current}/${status.total})`,
-        );
-      });
+      const bulkResult = await processBulkDailyReports(
+        callLogFiles,
+        dailyTemplateFile,
+        (status) => {
+          setBulkDailyProgress(Math.round((status.current / Math.max(status.total, 1)) * 100));
+          setBulkDailyProgressLabel(
+            `Generating ${status.teamName} (${status.current}/${status.total})`,
+          );
+        },
+      );
 
       if (bulkResult.totalTeams > 1 || bulkResult.failedReports > 0) {
         setBulkDailyProgress(100);
@@ -666,7 +670,7 @@ function HomePage() {
       }
 
       setBulkDailyProgressLabel("Preparing report preview...");
-      const result = await processDailyReport(callLogFile, dailyTemplateFile);
+      const result = await processDailyReport(callLogFiles, dailyTemplateFile);
       setDailyReport(result);
       await saveReportHistoryAndDatabase({
         id: crypto.randomUUID(),
@@ -1041,7 +1045,7 @@ function HomePage() {
           icon={<TableProperties className="h-5 w-5" />}
           label="Report tool"
           title="Daily Report"
-          description="Two Excel files only. No PDF upload is required."
+          description="Upload one sample workbook and one or more call log Excel files. No PDF upload is required."
         />
 
         <main className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
@@ -1091,41 +1095,61 @@ function HomePage() {
               <UploadCard
                 step={2}
                 title="Call Log Excel"
-                subtitle={callLogFile ? "Call log selected" : "Upload the team call log workbook"}
+                subtitle={
+                  callLogFiles.length
+                    ? `${callLogFiles.length} call log file(s) selected`
+                    : "Upload one or more team call log workbooks"
+                }
                 icon={<FileSpreadsheet className="h-5 w-5" />}
                 accept=".xlsx,.xls,.xlsm"
-                ready={Boolean(callLogFile)}
+                ready={callLogFiles.length > 0}
                 onClick={() => callLogInputRef.current?.click()}
               >
                 <input
                   ref={callLogInputRef}
                   type="file"
                   accept=".xlsx,.xls,.xlsm"
+                  multiple
                   className="hidden"
                   onChange={(event) => {
-                    const file = event.target.files?.[0];
-                    if (!file) return;
-                    setCallLogFile(file);
+                    const files = Array.from(event.target.files ?? []);
+                    if (!files.length) return;
+                    setCallLogFiles(files);
                     setDailyReport(null);
                     setBulkDailyReport(null);
                     setDailyPreview(null);
                   }}
                 />
-                {callLogFile ? (
-                  <FilePill
-                    name={callLogFile.name}
-                    onRemove={() => {
-                      setCallLogFile(null);
-                      setDailyReport(null);
-                      setBulkDailyReport(null);
-                      setDailyPreview(null);
-                    }}
-                    color="accent"
-                  />
+                {callLogFiles.length ? (
+                  <div className="space-y-2">
+                    {callLogFiles.map((file) => (
+                      <FilePill
+                        key={`${file.name}-${file.lastModified}-${file.size}`}
+                        name={file.name}
+                        onRemove={() => {
+                          setCallLogFiles((current) =>
+                            current.filter(
+                              (item) =>
+                                !(
+                                  item.name === file.name &&
+                                  item.lastModified === file.lastModified &&
+                                  item.size === file.size
+                                ),
+                            ),
+                          );
+                          if (callLogInputRef.current) callLogInputRef.current.value = "";
+                          setDailyReport(null);
+                          setBulkDailyReport(null);
+                          setDailyPreview(null);
+                        }}
+                        color="accent"
+                      />
+                    ))}
+                  </div>
                 ) : (
                   <EmptyHint
                     icon={<FileSpreadsheet className="h-5 w-5" />}
-                    label="Choose call log"
+                    label="Choose call log file(s)"
                   />
                 )}
               </UploadCard>
@@ -1140,9 +1164,8 @@ function HomePage() {
                   </h2>
                   <p className="text-sm text-muted-foreground">
                     Data is matched by Employee Code only, then Planned, Unplanned, Mor, Eve, Total,
-                    and Cp are filled in the sample file. Use all teams when the workbook has a Team
-                    Name/Team ID column or one worksheet per team; if the call log has a Team
-                    column, only matching teams are generated.
+                    and Cp are filled in the sample file. Select all team call-log files together to
+                    generate all matching team reports from a multi-team sample workbook.
                   </p>
                 </div>
                 <Button
@@ -1310,7 +1333,7 @@ function HomePage() {
                 <ShieldCheck className="h-5 w-5 text-primary" />
               </div>
               <div className="space-y-3">
-                <ChecklistItem done={Boolean(callLogFile)} label="Call log attached" />
+                <ChecklistItem done={callLogFiles.length > 0} label="Call log attached" />
                 <ChecklistItem done={Boolean(dailyTemplateFile)} label="Sample file attached" />
                 <ChecklistItem
                   done={Boolean(dailyReport || bulkDailyReport)}
@@ -1322,9 +1345,9 @@ function HomePage() {
             <Card className="border-border bg-card p-5 shadow-[var(--shadow-soft)]">
               <div className="text-xs font-bold uppercase text-primary">Match rule</div>
               <p className="mt-2 text-sm text-muted-foreground">
-                The sample file must include: SR #, Region, Employee Code, Name, City, Designation,
-                Planned, Unplanned, Mor, Eve, Total, Cp, and Remarks. Existing rows and Remarks are
-                preserved.
+                The sample file must include: Employee Code, Name, Planned, Unplanned, Mor, Eve,
+                Total, and Cp. For all teams, select every team's call-log file in the Call Log
+                Excel upload.
               </p>
             </Card>
           </aside>
