@@ -182,6 +182,7 @@ function HomePage() {
   const [historyPreview, setHistoryPreview] = useState<SheetPreview | null>(null);
   const [historyPreviewLoading, setHistoryPreviewLoading] = useState(false);
   const [callLogFiles, setCallLogFiles] = useState<File[]>([]);
+  const [dailySelfieFiles, setDailySelfieFiles] = useState<File[]>([]);
   const [dailyTemplateFile, setDailyTemplateFile] = useState<File | null>(null);
   const [dailyProcessing, setDailyProcessing] = useState(false);
   const [dailyReport, setDailyReport] = useState<DailyReportResult | null>(null);
@@ -209,6 +210,7 @@ function HomePage() {
   const pdfInputRef = useRef<HTMLInputElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const callLogInputRef = useRef<HTMLInputElement>(null);
+  const dailySelfieInputRef = useRef<HTMLInputElement>(null);
   const dailyTemplateInputRef = useRef<HTMLInputElement>(null);
   const dailyPreviewRef = useRef<HTMLDivElement>(null);
   const coverageSourceInputRef = useRef<HTMLInputElement>(null);
@@ -1111,7 +1113,7 @@ function HomePage() {
 
         <main className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
           <div className="space-y-6">
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-4 lg:grid-cols-3">
               <UploadCard
                 step={1}
                 title="Daily Report Sample"
@@ -1214,19 +1216,81 @@ function HomePage() {
                   />
                 )}
               </UploadCard>
+
+              <UploadCard
+                step={3}
+                title="Selfies Excel"
+                subtitle={
+                  dailySelfieFiles.length
+                    ? `${dailySelfieFiles.length} selfies file(s) selected`
+                    : "Upload selfies workbook(s)"
+                }
+                icon={<FileSpreadsheet className="h-5 w-5" />}
+                accept=".xlsx,.xls,.xlsm"
+                ready={dailySelfieFiles.length > 0}
+                onClick={() => dailySelfieInputRef.current?.click()}
+              >
+                <input
+                  ref={dailySelfieInputRef}
+                  type="file"
+                  accept=".xlsx,.xls,.xlsm"
+                  multiple
+                  className="hidden"
+                  onChange={(event) => {
+                    const files = Array.from(event.target.files ?? []);
+                    if (!files.length) return;
+                    setDailySelfieFiles(files);
+                    setDailyReport(null);
+                    setBulkDailyReport(null);
+                    setDailyPreview(null);
+                  }}
+                />
+                {dailySelfieFiles.length ? (
+                  <div className="space-y-2">
+                    {dailySelfieFiles.map((file) => (
+                      <FilePill
+                        key={`${file.name}-${file.lastModified}-${file.size}`}
+                        name={file.name}
+                        onRemove={() => {
+                          setDailySelfieFiles((current) =>
+                            current.filter(
+                              (item) =>
+                                !(
+                                  item.name === file.name &&
+                                  item.lastModified === file.lastModified &&
+                                  item.size === file.size
+                                ),
+                            ),
+                          );
+                          if (dailySelfieInputRef.current) dailySelfieInputRef.current.value = "";
+                          setDailyReport(null);
+                          setBulkDailyReport(null);
+                          setDailyPreview(null);
+                        }}
+                        color="accent"
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <EmptyHint
+                    icon={<FileSpreadsheet className="h-5 w-5" />}
+                    label="Choose selfies file(s)"
+                  />
+                )}
+              </UploadCard>
             </div>
 
             <Card className="border-border bg-card p-6 shadow-[var(--shadow-soft)]">
               <div className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
                 <div>
-                  <div className="text-xs font-bold uppercase text-primary">Step 3</div>
+                  <div className="text-xs font-bold uppercase text-primary">Step 4</div>
                   <h2 className="mt-1 text-lg font-semibold text-foreground">
                     Generate daily report
                   </h2>
                   <p className="text-sm text-muted-foreground">
                     Data is matched by Employee Code only, then Planned, Unplanned, Mor, Eve, Total,
-                    and Cp are filled in the sample file. Select all team call-log files together to
-                    generate all matching team reports from a multi-team sample workbook.
+                    and Cp are filled in the sample file. Selfies Excel upload is ready for the next
+                    function and will be connected after its matching rules are finalized.
                   </p>
                 </div>
                 <Button
@@ -1395,6 +1459,7 @@ function HomePage() {
               </div>
               <div className="space-y-3">
                 <ChecklistItem done={callLogFiles.length > 0} label="Call log attached" />
+                <ChecklistItem done={dailySelfieFiles.length > 0} label="Selfies Excel attached" />
                 <ChecklistItem done={Boolean(dailyTemplateFile)} label="Sample file attached" />
                 <ChecklistItem
                   done={Boolean(dailyReport || bulkDailyReport)}
