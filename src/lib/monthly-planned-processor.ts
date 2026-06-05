@@ -20,6 +20,8 @@ export interface MonthlyPlannedResult {
 interface MonthlySummary {
   code: string;
   name: string;
+  teamName: string;
+  sourceName: string;
   days: Set<string>;
   cpTimes: number[];
   planned: number;
@@ -46,6 +48,7 @@ const CALL_HEADER_HINTS: Record<string, string[]> = {
   startTime: ["start time"],
   eventType: ["event type"],
   meetingType: ["meeting type"],
+  team: ["team name", "team", "team id", "team code"],
 };
 
 const TEMPLATE_HEADER_HINTS: Record<string, string[]> = {
@@ -54,50 +57,33 @@ const TEMPLATE_HEADER_HINTS: Record<string, string[]> = {
 };
 
 export async function processMonthlyPlannedReport(
-  callLogFile: File,
+  callLogFile: File | File[],
   templateFile: File,
 ): Promise<MonthlyPlannedResult> {
   const callLog = await readMonthlyCallLog(callLogFile);
-  const summariesByCode = new Map(callLog.summaries.map((item) => [item.code, item]));
-  const unmatched = new Set(callLog.summaries.map((item) => `${item.code} ${item.name}`));
-
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(await templateFile.arrayBuffer());
-  const sheet = workbook.worksheets[0];
-  if (!sheet) throw new Error("Sample workbook does not contain a sheet.");
+  const candidateSheets = workbook.worksheets.filter((sheet) => findTemplateIdentityColumns(sheet));
+  const sheets =
+    candidateSheets.length > 1 ? candidateSheets : [workbook.worksheets[0]].filter(Boolean);
+  if (!sheets.length) throw new Error("Sample workbook does not contain a sheet.");
 
-  const columns = ensureMonthlyColumns(sheet);
+  const unmatched = new Set(callLog.summaries.map(monthlySummaryKey));
   const preview: { name: string; total: number }[] = [];
   let matchedEmployees = 0;
   let templateRows = 0;
+  let firstSheetName = sheets[0].name;
 
-  for (let rowNumber = 1; rowNumber <= sheet.rowCount; rowNumber++) {
-    const row = sheet.getRow(rowNumber);
-    const code = normalizeEmployeeCode(row.getCell(columns.codeCol).text);
-    const name = row.getCell(columns.nameCol).text;
-    if (!code) continue;
-    templateRows++;
-
-    const match = summariesByCode.get(code);
-    if (!match) {
-      clearMonthlyCells(row, columns);
-      continue;
-    }
-
-    const days = match.days.size;
-    matchedEmployees++;
-    unmatched.delete(`${match.code} ${match.name}`);
-
-    row.getCell(columns.plannedCol).value = match.planned;
-    row.getCell(columns.plannedAvgCol).value = average(match.planned, days);
-    row.getCell(columns.unplannedCol).value = match.unplanned;
-    row.getCell(columns.unplannedAvgCol).value = average(match.unplanned, days);
-    row.getCell(columns.totalCallsCol).value = match.totalCalls;
-    row.getCell(columns.totalCallsAvgCol).value = average(match.totalCalls, days);
-    row.getCell(columns.cpAvgTimeCol).value = averageTime(match.cpTimes);
-    styleMonthlyCells(row, columns);
-
-    if (match.totalCalls > 0) preview.push({ name: name || match.name, total: match.totalCalls });
+  for (const sheet of sheets) {
+    const summaries = filterMonthlySummariesForSheet(callLog.summaries, sheet, sheets.length > 1);
+    const result = fillMonthlyPlannedSheet(sheet, summaries);
+    firstSheetName = firstSheetName || sheet.name;
+    matchedEmployees += result.matchedEmployees;
+    templateRows += result.templateRows;
+    result.matchedKeys.forEach((key) => {
+      unmatched.delete(key);
+    });
+    preview.push(...result.preview);
   }
 
   const buffer = await workbook.xlsx.writeBuffer();
@@ -120,87 +106,200 @@ export async function processMonthlyPlannedReport(
     },
     blob,
     fileName: templateFile.name.replace(/\.xlsx$/i, "") + " - Monthly Planned Unplanned.xlsx",
-    sheetName: sheet.name,
+    sheetName: firstSheetName,
     preview: preview.sort((a, b) => b.total - a.total).slice(0, 10),
   };
 }
 
-async function readMonthlyCallLog(file: File): Promise<{
+function fillMonthlyPlannedSheet(sheet: ExcelJS.Worksheet, summaries: MonthlySummary[]) {
+  const summariesByCode = new Map(summaries.map((item) => [item.code, item]));
+  const columns = ensureMonthlyColumns(sheet);
+  const matchedKeys = new Set<string>();
+  const preview: { name: string; total: number }[] = [];
+  let matchedEmployees = 0;
+  let templateRows = 0;
+
+  for (let rowNumber = 1; rowNumber <= sheet.rowCount; rowNumber++) {
+    const row = sheet.getRow(rowNumber);
+    const code = normalizeEmployeeCode(cellText(row.getCell(columns.codeCol)));
+    const name = cellText(row.getCell(columns.nameCol));
+    if (!code) continue;
+    templateRows++;
+
+    const match = summariesByCode.get(code);
+    if (!match) {
+      clearMonthlyCells(row, columns);
+      continue;
+    }
+
+    const days = match.days.size;
+    matchedEmployees++;
+    matchedKeys.add(monthlySummaryKey(match));
+
+    row.getCell(columns.plannedCol).value = match.planned;
+    row.getCell(columns.plannedAvgCol).value = average(match.planned, days);
+    row.getCell(columns.unplannedCol).value = match.unplanned;
+    row.getCell(columns.unplannedAvgCol).value = average(match.unplanned, days);
+    row.getCell(columns.totalCallsCol).value = match.totalCalls;
+    row.getCell(columns.totalCallsAvgCol).value = average(match.totalCalls, days);
+    row.getCell(columns.cpAvgTimeCol).value = averageTime(match.cpTimes);
+    styleMonthlyCells(row, columns);
+
+    if (match.totalCalls > 0) preview.push({ name: name || match.name, total: match.totalCalls });
+  }
+
+  return { matchedEmployees, templateRows, matchedKeys, preview };
+}
+
+async function readMonthlyCallLog(input: File | File[]): Promise<{
   summaries: MonthlySummary[];
   sourceRows: number;
   faceToFaceRows: number;
   contactPointRows: number;
 }> {
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(await file.arrayBuffer());
-  const sheet = workbook.worksheets[0];
-  if (!sheet) throw new Error("Call log workbook does not contain a sheet.");
-
-  const headerRow = sheet.getRow(1);
-  const headers = new Map<string, number>();
-  for (let c = 1; c <= sheet.columnCount; c++) headers.set(normalize(headerRow.getCell(c).text), c);
-
-  const codeCol = findHeader(headers, CALL_HEADER_HINTS.code);
-  const nameCol = findHeader(headers, CALL_HEADER_HINTS.name);
-  const dateCol = findHeader(headers, CALL_HEADER_HINTS.date);
-  const startTimeCol = findHeader(headers, CALL_HEADER_HINTS.startTime);
-  const eventTypeCol = findHeader(headers, CALL_HEADER_HINTS.eventType);
-  const meetingTypeCol = findHeader(headers, CALL_HEADER_HINTS.meetingType);
-
+  const files = Array.isArray(input) ? input : [input];
   const byCode = new Map<string, MonthlySummary>();
   let sourceRows = 0;
   let faceToFaceRows = 0;
   let contactPointRows = 0;
 
-  for (let rowNumber = 2; rowNumber <= sheet.rowCount; rowNumber++) {
-    const row = sheet.getRow(rowNumber);
-    const code = normalizeEmployeeCode(row.getCell(codeCol).text);
-    if (!code) continue;
+  for (const file of files) {
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(await file.arrayBuffer());
+    const sheets = workbook.worksheets.filter((sheet) => findMonthlyCallLogColumns(sheet));
+    const sourceSheets = sheets.length ? sheets : workbook.worksheets.slice(0, 1);
+    if (!sourceSheets.length) throw new Error("Call log workbook does not contain a sheet.");
 
-    const meetingType = normalize(row.getCell(meetingTypeCol).text);
-    if (meetingType !== "face to face call" && meetingType !== "contact point") continue;
+    for (const sheet of sourceSheets) {
+      const columns = findMonthlyCallLogColumns(sheet);
+      if (!columns) {
+        throw new Error(
+          "Call log columns were not found. Required: Emp ID, Name, Date, Start Time, Event Type, and Meeting Type.",
+        );
+      }
 
-    const name = row.getCell(nameCol).text.trim();
-    const eventType = normalize(row.getCell(eventTypeCol).text);
-    const dateKey = normalizeDateKey(row.getCell(dateCol).value, row.getCell(dateCol).text);
-    let summary = byCode.get(code);
-    if (!summary) {
-      summary = {
-        code,
-        name,
-        days: new Set<string>(),
-        cpTimes: [],
-        planned: 0,
-        unplanned: 0,
-        totalCalls: 0,
-      };
-      byCode.set(code, summary);
+      for (let rowNumber = columns.headerRow + 1; rowNumber <= sheet.rowCount; rowNumber++) {
+        const row = sheet.getRow(rowNumber);
+        const code = normalizeEmployeeCode(cellText(row.getCell(columns.codeCol)));
+        if (!code) continue;
+
+        const meetingType = normalize(cellText(row.getCell(columns.meetingTypeCol)));
+        if (meetingType !== "face to face call" && meetingType !== "contact point") continue;
+
+        const name = cellText(row.getCell(columns.nameCol)).trim();
+        const eventType = normalize(cellText(row.getCell(columns.eventTypeCol)));
+        const dateKey = normalizeDateKey(
+          row.getCell(columns.dateCol).value,
+          cellText(row.getCell(columns.dateCol)),
+        );
+        const teamName = columns.teamCol ? cellText(row.getCell(columns.teamCol)).trim() : "";
+        const sourceName = `${file.name} ${sheet.name}`;
+        const summaryKey = `${normalizeTeamName(teamName || sourceName)}|${code}`;
+        let summary = byCode.get(summaryKey);
+        if (!summary) {
+          summary = {
+            code,
+            name,
+            teamName: teamName || sheet.name,
+            sourceName,
+            days: new Set<string>(),
+            cpTimes: [],
+            planned: 0,
+            unplanned: 0,
+            totalCalls: 0,
+          };
+          byCode.set(summaryKey, summary);
+        }
+
+        sourceRows++;
+        if (dateKey) summary.days.add(dateKey);
+
+        if (meetingType === "contact point") {
+          contactPointRows++;
+          const cpTime = timeToMinutes(
+            row.getCell(columns.startTimeCol).value,
+            cellText(row.getCell(columns.startTimeCol)),
+          );
+          if (cpTime > 0) summary.cpTimes.push(cpTime);
+          continue;
+        }
+
+        faceToFaceRows++;
+        if (eventType === "planned") summary.planned++;
+        if (eventType === "unplanned") summary.unplanned++;
+        summary.totalCalls = summary.planned + summary.unplanned;
+      }
     }
-
-    sourceRows++;
-    if (dateKey) summary.days.add(dateKey);
-
-    if (meetingType === "contact point") {
-      contactPointRows++;
-      const cpTime = timeToMinutes(row.getCell(startTimeCol).value, row.getCell(startTimeCol).text);
-      if (cpTime > 0) summary.cpTimes.push(cpTime);
-      continue;
-    }
-
-    faceToFaceRows++;
-    if (eventType === "planned") summary.planned++;
-    if (eventType === "unplanned") summary.unplanned++;
-    summary.totalCalls = summary.planned + summary.unplanned;
   }
 
   return { summaries: [...byCode.values()], sourceRows, faceToFaceRows, contactPointRows };
+}
+
+function filterMonthlySummariesForSheet(
+  summaries: MonthlySummary[],
+  sheet: ExcelJS.Worksheet,
+  isBulkTemplate: boolean,
+): MonthlySummary[] {
+  if (!isBulkTemplate) return summaries;
+  const teamSummaries = summaries.filter((summary) =>
+    [summary.teamName, summary.sourceName].some((value) => teamNamesMatch(value, sheet.name)),
+  );
+  return teamSummaries.length ? teamSummaries : summaries;
+}
+
+function monthlySummaryKey(summary: MonthlySummary): string {
+  return `${summary.sourceName}|${summary.teamName}|${summary.code}`;
+}
+
+function findMonthlyCallLogColumns(sheet: ExcelJS.Worksheet) {
+  for (let rowNumber = 1; rowNumber <= Math.min(sheet.rowCount, 10); rowNumber++) {
+    const row = sheet.getRow(rowNumber);
+    const headers = new Map<string, number>();
+    for (let c = 1; c <= sheet.columnCount; c++)
+      headers.set(normalize(cellText(row.getCell(c))), c);
+    const codeCol = findHeader(headers, CALL_HEADER_HINTS.code, false);
+    const nameCol = findHeader(headers, CALL_HEADER_HINTS.name, false);
+    const dateCol = findHeader(headers, CALL_HEADER_HINTS.date, false);
+    const startTimeCol = findHeader(headers, CALL_HEADER_HINTS.startTime, false);
+    const eventTypeCol = findHeader(headers, CALL_HEADER_HINTS.eventType, false);
+    const meetingTypeCol = findHeader(headers, CALL_HEADER_HINTS.meetingType, false);
+    const teamCol = findHeader(headers, CALL_HEADER_HINTS.team, false);
+    if (codeCol && nameCol && dateCol && startTimeCol && eventTypeCol && meetingTypeCol) {
+      return {
+        headerRow: rowNumber,
+        codeCol,
+        nameCol,
+        dateCol,
+        startTimeCol,
+        eventTypeCol,
+        meetingTypeCol,
+        teamCol,
+      };
+    }
+  }
+  return null;
+}
+
+function findTemplateIdentityColumns(sheet: ExcelJS.Worksheet): boolean {
+  for (let rowNumber = 1; rowNumber <= Math.min(sheet.rowCount, 12); rowNumber++) {
+    const row = sheet.getRow(rowNumber);
+    const labels = new Map<string, number>();
+    for (let c = 1; c <= sheet.columnCount; c++) labels.set(normalize(cellText(row.getCell(c))), c);
+    if (
+      findHeader(labels, TEMPLATE_HEADER_HINTS.code, false) &&
+      findHeader(labels, TEMPLATE_HEADER_HINTS.name, false)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function ensureMonthlyColumns(sheet: ExcelJS.Worksheet): MonthlyColumns {
   for (let rowNumber = 1; rowNumber <= Math.min(sheet.rowCount, 12); rowNumber++) {
     const row = sheet.getRow(rowNumber);
     const labels = new Map<string, number>();
-    for (let c = 1; c <= sheet.columnCount; c++) labels.set(normalize(row.getCell(c).text), c);
+    for (let c = 1; c <= sheet.columnCount; c++) labels.set(normalize(cellText(row.getCell(c))), c);
 
     const codeCol = findHeader(labels, TEMPLATE_HEADER_HINTS.code, false);
     const nameCol = findHeader(labels, TEMPLATE_HEADER_HINTS.name, false);
@@ -280,7 +379,7 @@ function findLastUsedColumn(sheet: ExcelJS.Worksheet): number {
   for (let rowNumber = 1; rowNumber <= Math.min(sheet.rowCount, 12); rowNumber++) {
     const row = sheet.getRow(rowNumber);
     row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
-      if (cell.text.trim()) lastUsedCol = Math.max(lastUsedCol, colNumber);
+      if (cellText(cell).trim()) lastUsedCol = Math.max(lastUsedCol, colNumber);
     });
   }
   return lastUsedCol || sheet.columnCount;
@@ -350,12 +449,45 @@ function minutesToTime(totalMinutes: number): string {
 }
 
 function normalize(value: string): string {
-  return String(value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+  return String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function cellText(cell: ExcelJS.Cell): string {
+  const value = cell.value;
+  if (value == null) return "";
+  if (typeof value === "object") {
+    if ("text" in value) return String((value as { text?: unknown }).text ?? "");
+    if ("result" in value) return String((value as { result?: unknown }).result ?? "");
+    if ("richText" in value && Array.isArray((value as { richText?: unknown }).richText)) {
+      return (value as { richText: Array<{ text?: string }> }).richText
+        .map((part) => part.text ?? "")
+        .join("");
+    }
+    return "";
+  }
+  return String(value);
 }
 
 function normalizeEmployeeCode(value: string): string {
-  const digits = String(value ?? "").match(/\d+/g)?.join("") ?? "";
-  return digits.length >= 4 ? digits : "";
+  const digits =
+    String(value ?? "")
+      .match(/\d+/g)
+      ?.join("") ?? "";
+  return digits.length >= 3 ? digits : "";
+}
+
+function normalizeTeamName(value: string): string {
+  return normalize(value).replace(/[^a-z0-9]+/g, "");
+}
+
+function teamNamesMatch(sourceValue: string, sheetName: string): boolean {
+  const sourceKey = normalizeTeamName(sourceValue);
+  const sheetKey = normalizeTeamName(sheetName);
+  if (!sourceKey || !sheetKey) return false;
+  return sourceKey.includes(sheetKey) || sheetKey.includes(sourceKey);
 }
 
 function normalizeDateKey(value: unknown, text: string): string {

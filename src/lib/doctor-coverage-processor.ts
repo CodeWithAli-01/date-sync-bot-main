@@ -18,6 +18,8 @@ export interface DoctorCoverageResult {
 interface CoverageRow {
   code: string;
   name: string;
+  teamName: string;
+  sourceName: string;
   targetDoctors: number;
   coveredDoctors: number;
   coveragePercent: string;
@@ -39,6 +41,7 @@ interface CoverageSourceColumns {
   targetDoctorsCol: number;
   coveredDoctorsCol: number;
   coveragePercentCol: number;
+  teamCol: number;
 }
 
 const SOURCE_HINTS: Record<string, string[]> = {
@@ -53,6 +56,7 @@ const SOURCE_HINTS: Record<string, string[]> = {
     "coverage percentage",
     "coverage",
   ],
+  team: ["team name", "team", "team id", "team code"],
 };
 
 const TEMPLATE_HINTS: Record<string, string[]> = {
@@ -67,45 +71,38 @@ const COVERAGE_OUTPUT_HEADERS = {
 } as const;
 
 export async function processDoctorCoverageReport(
-  sourceFile: File,
+  sourceFile: File | File[],
   templateFile: File,
 ): Promise<DoctorCoverageResult> {
   const sourceRows = await readCoverageRows(sourceFile);
-  const sourceByCode = new Map(sourceRows.map((row) => [row.code, row]));
-  const sourceByName = new Map(sourceRows.map((row) => [personNameKey(row.name), row]));
-  const unmatched = new Set(sourceRows.map((row) => `${row.code} ${row.name}`));
-
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(await templateFile.arrayBuffer());
-  const sheet = workbook.worksheets[0];
-  if (!sheet) throw new Error("Sample workbook does not contain a sheet.");
+  const candidateSheets = workbook.worksheets.filter((sheet) => findTemplateColumns(sheet));
+  const sheets =
+    candidateSheets.length > 1 ? candidateSheets : [workbook.worksheets[0]].filter(Boolean);
+  if (!sheets.length) throw new Error("Sample workbook does not contain a sheet.");
 
-  const columns = ensureTemplateColumns(sheet);
+  const allMatchedKeys = new Set<string>();
   const preview: { name: string; total: number }[] = [];
   let matchedEmployees = 0;
   let templateRows = 0;
+  let firstSheetName = sheets[0].name;
 
-  for (let rowNumber = columns.headerRow + 1; rowNumber <= sheet.rowCount; rowNumber++) {
-    const row = sheet.getRow(rowNumber);
-    const code = normalizeEmployeeCode(row.getCell(columns.codeCol).text);
-    const name = row.getCell(columns.nameCol).text;
-    if (!code && !personNameKey(name)) continue;
-    templateRows++;
-
-    const match = (code && sourceByCode.get(code)) || sourceByName.get(personNameKey(name));
-    if (!match) {
-      clearCoverageCells(row, columns);
-      continue;
-    }
-
-    matchedEmployees++;
-    unmatched.delete(`${match.code} ${match.name}`);
-    row.getCell(columns.targetDoctorsCol).value = match.targetDoctors;
-    row.getCell(columns.coveredDoctorsCol).value = match.coveredDoctors;
-    row.getCell(columns.coveragePercentCol).value = match.coveragePercent;
-    styleCoverageCells(row, columns);
-    preview.push({ name: name || match.name, total: match.coveredDoctors });
+  for (const sheet of sheets) {
+    const sourceForSheet = filterCoverageRowsForSheet(sourceRows, sheet, sheets.length > 1);
+    const result = fillCoverageSheet(sheet, sourceForSheet);
+    firstSheetName = firstSheetName || sheet.name;
+    matchedEmployees += result.matchedEmployees;
+    templateRows += result.templateRows;
+    result.matchedKeys.forEach((key) => allMatchedKeys.add(key));
+    preview.push(...result.preview);
   }
+
+  const unmatched = new Set(
+    sourceRows
+      .filter((row) => !allMatchedKeys.has(coverageKey(row)))
+      .map((row) => `${row.code} ${row.name}`),
+  );
 
   const buffer = await workbook.xlsx.writeBuffer();
   const blob = new Blob([buffer], {
@@ -125,48 +122,112 @@ export async function processDoctorCoverageReport(
     },
     blob,
     fileName: templateFile.name.replace(/\.xlsx$/i, "") + " - Doctor Coverage Report.xlsx",
-    sheetName: sheet.name,
+    sheetName: firstSheetName,
     preview: preview.sort((a, b) => b.total - a.total).slice(0, 10),
   };
 }
 
-async function readCoverageRows(file: File): Promise<CoverageRow[]> {
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(await file.arrayBuffer());
-  const sheet =
-    workbook.worksheets.find((worksheet) => findCoverageSourceColumns(worksheet)) ??
-    workbook.worksheets[0];
-  if (!sheet) throw new Error("Doctor coverage workbook does not contain a sheet.");
+function fillCoverageSheet(sheet: ExcelJS.Worksheet, sourceRows: CoverageRow[]) {
+  const sourceByCode = new Map(sourceRows.map((row) => [row.code, row]));
+  const sourceByName = new Map(sourceRows.map((row) => [personNameKey(row.name), row]));
+  const matchedKeys = new Set<string>();
+  const columns = ensureTemplateColumns(sheet);
+  const preview: { name: string; total: number }[] = [];
+  let matchedEmployees = 0;
+  let templateRows = 0;
 
-  const columns = findCoverageSourceColumns(sheet);
-  if (!columns) {
-    throw new Error(
-      "Doctor coverage columns were not found. Required: Employee Code/Name, Target Doctors, and Covered Doctors.",
-    );
+  for (let rowNumber = columns.headerRow + 1; rowNumber <= sheet.rowCount; rowNumber++) {
+    const row = sheet.getRow(rowNumber);
+    const code = normalizeEmployeeCode(cellText(row.getCell(columns.codeCol)));
+    const name = cellText(row.getCell(columns.nameCol));
+    if (!code && !personNameKey(name)) continue;
+    templateRows++;
+
+    const match = (code && sourceByCode.get(code)) || sourceByName.get(personNameKey(name));
+    if (!match) {
+      clearCoverageCells(row, columns);
+      continue;
+    }
+
+    matchedEmployees++;
+    matchedKeys.add(coverageKey(match));
+    row.getCell(columns.targetDoctorsCol).value = match.targetDoctors;
+    row.getCell(columns.coveredDoctorsCol).value = match.coveredDoctors;
+    row.getCell(columns.coveragePercentCol).value = match.coveragePercent;
+    styleCoverageCells(row, columns);
+    preview.push({ name: name || match.name, total: match.coveredDoctors });
   }
+
+  return { matchedEmployees, templateRows, matchedKeys, preview };
+}
+
+async function readCoverageRows(input: File | File[]): Promise<CoverageRow[]> {
+  const files = Array.isArray(input) ? input : [input];
   const rows: CoverageRow[] = [];
 
-  for (let r = columns.headerRow + 1; r <= sheet.rowCount; r++) {
-    const row = sheet.getRow(r);
-    const code = normalizeEmployeeCode(rowText(row, columns.codeCol));
-    const name = rowText(row, columns.nameCol).trim();
-    if (!code && !personNameKey(name)) continue;
-    const targetDoctors = numericCell(row.getCell(columns.targetDoctorsCol));
-    const coveredDoctors = numericCell(row.getCell(columns.coveredDoctorsCol));
-    const coveragePercent = columns.coveragePercentCol
-      ? coverageText(row.getCell(columns.coveragePercentCol), targetDoctors, coveredDoctors)
-      : formatCoveragePercent(targetDoctors, coveredDoctors);
+  for (const file of files) {
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(await file.arrayBuffer());
+    const sourceSheets = workbook.worksheets.filter((worksheet) =>
+      findCoverageSourceColumns(worksheet),
+    );
+    const sheets = sourceSheets.length ? sourceSheets : workbook.worksheets.slice(0, 1);
+    if (!sheets.length) throw new Error("Doctor coverage workbook does not contain a sheet.");
 
-    rows.push({
-      code,
-      name,
-      targetDoctors,
-      coveredDoctors,
-      coveragePercent,
-    });
+    for (const sheet of sheets) {
+      const columns = findCoverageSourceColumns(sheet);
+      if (!columns) {
+        throw new Error(
+          "Doctor coverage columns were not found. Required: Employee Code/Name, Target Doctors, and Covered Doctors.",
+        );
+      }
+
+      for (let r = columns.headerRow + 1; r <= sheet.rowCount; r++) {
+        const row = sheet.getRow(r);
+        const code = normalizeEmployeeCode(rowText(row, columns.codeCol));
+        const name = rowText(row, columns.nameCol).trim();
+        if (!code && !personNameKey(name)) continue;
+        const targetDoctors = numericCell(row.getCell(columns.targetDoctorsCol));
+        const coveredDoctors = numericCell(row.getCell(columns.coveredDoctorsCol));
+        const coveragePercent = columns.coveragePercentCol
+          ? coverageText(row.getCell(columns.coveragePercentCol), targetDoctors, coveredDoctors)
+          : formatCoveragePercent(targetDoctors, coveredDoctors);
+        const teamName = columns.teamCol ? rowText(row, columns.teamCol).trim() : "";
+
+        rows.push({
+          code,
+          name,
+          teamName: teamName || sheet.name,
+          sourceName: `${file.name} ${sheet.name}`,
+          targetDoctors,
+          coveredDoctors,
+          coveragePercent,
+        });
+      }
+    }
   }
 
   return rows;
+}
+
+function filterCoverageRowsForSheet(
+  sourceRows: CoverageRow[],
+  sheet: ExcelJS.Worksheet,
+  isBulkTemplate: boolean,
+): CoverageRow[] {
+  if (!isBulkTemplate) return sourceRows;
+  const sheetKey = normalizeTeamName(sheet.name);
+  if (!sheetKey) return sourceRows;
+
+  const teamRows = sourceRows.filter((row) =>
+    [row.teamName, row.sourceName].some((value) => teamNamesMatch(value, sheet.name)),
+  );
+
+  return teamRows.length ? teamRows : sourceRows;
+}
+
+function coverageKey(row: CoverageRow): string {
+  return `${row.sourceName}|${row.teamName}|${row.code}|${personNameKey(row.name)}`;
 }
 
 function rowText(row: ExcelJS.Row, columnNumber: number): string {
@@ -181,6 +242,7 @@ function findCoverageSourceColumns(sheet: ExcelJS.Worksheet): CoverageSourceColu
     const targetDoctorsCol = findHeader(labels, SOURCE_HINTS.targetDoctors, false);
     const coveredDoctorsCol = findHeader(labels, SOURCE_HINTS.coveredDoctors, false);
     const coveragePercentCol = findHeader(labels, SOURCE_HINTS.coveragePercent, false);
+    const teamCol = findHeader(labels, SOURCE_HINTS.team, false);
 
     if ((codeCol || nameCol) && targetDoctorsCol && coveredDoctorsCol) {
       return {
@@ -190,11 +252,24 @@ function findCoverageSourceColumns(sheet: ExcelJS.Worksheet): CoverageSourceColu
         targetDoctorsCol,
         coveredDoctorsCol,
         coveragePercentCol,
+        teamCol,
       };
     }
   }
 
   return null;
+}
+
+function findTemplateColumns(sheet: ExcelJS.Worksheet): boolean {
+  for (let rowNumber = 1; rowNumber <= Math.min(sheet.rowCount, 12); rowNumber++) {
+    const row = sheet.getRow(rowNumber);
+    const labels = headerLabels(row, sheet.columnCount);
+    const codeCol = findHeader(labels, TEMPLATE_HINTS.code, false);
+    const nameCol = findHeader(labels, TEMPLATE_HINTS.name, false);
+    if (codeCol && nameCol) return true;
+  }
+
+  return false;
 }
 
 function ensureTemplateColumns(sheet: ExcelJS.Worksheet): TemplateColumns {
@@ -364,7 +439,7 @@ function normalizeHeader(value: string): string {
 
 function cellText(cell: ExcelJS.Cell): string {
   const value = cell.value;
-  if (value == null) return cell.text ?? "";
+  if (value == null) return "";
   if (typeof value === "object") {
     if ("text" in value) return String((value as { text?: unknown }).text ?? "");
     if ("result" in value) return String((value as { result?: unknown }).result ?? "");
@@ -373,8 +448,9 @@ function cellText(cell: ExcelJS.Cell): string {
         .map((part) => part.text ?? "")
         .join("");
     }
+    return "";
   }
-  return cell.text || String(value);
+  return String(value);
 }
 
 function normalizeEmployeeCode(value: string): string {
@@ -382,7 +458,18 @@ function normalizeEmployeeCode(value: string): string {
     String(value ?? "")
       .match(/\d+/g)
       ?.join("") ?? "";
-  return digits.length >= 4 ? digits : "";
+  return digits.length >= 3 ? digits : "";
+}
+
+function normalizeTeamName(value: string): string {
+  return normalize(value).replace(/[^a-z0-9]+/g, "");
+}
+
+function teamNamesMatch(sourceValue: string, sheetName: string): boolean {
+  const sourceKey = normalizeTeamName(sourceValue);
+  const sheetKey = normalizeTeamName(sheetName);
+  if (!sourceKey || !sheetKey) return false;
+  return sourceKey.includes(sheetKey) || sheetKey.includes(sourceKey);
 }
 
 function personNameKey(value: string): string {

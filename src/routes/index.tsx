@@ -186,13 +186,13 @@ function HomePage() {
   const [bulkDailyProgressLabel, setBulkDailyProgressLabel] = useState("");
   const [dailyPreview, setDailyPreview] = useState<SheetPreview | null>(null);
   const [dailyPreviewLoading, setDailyPreviewLoading] = useState(false);
-  const [coverageSourceFile, setCoverageSourceFile] = useState<File | null>(null);
+  const [coverageSourceFiles, setCoverageSourceFiles] = useState<File[]>([]);
   const [coverageTemplateFile, setCoverageTemplateFile] = useState<File | null>(null);
   const [coverageProcessing, setCoverageProcessing] = useState(false);
   const [coverageReport, setCoverageReport] = useState<DoctorCoverageResult | null>(null);
   const [coveragePreview, setCoveragePreview] = useState<SheetPreview | null>(null);
   const [coveragePreviewLoading, setCoveragePreviewLoading] = useState(false);
-  const [monthlyPlannedCallLogFile, setMonthlyPlannedCallLogFile] = useState<File | null>(null);
+  const [monthlyPlannedCallLogFiles, setMonthlyPlannedCallLogFiles] = useState<File[]>([]);
   const [monthlyPlannedTemplateFile, setMonthlyPlannedTemplateFile] = useState<File | null>(null);
   const [monthlyPlannedProcessing, setMonthlyPlannedProcessing] = useState(false);
   const [monthlyPlannedReport, setMonthlyPlannedReport] = useState<MonthlyPlannedResult | null>(
@@ -459,9 +459,9 @@ function HomePage() {
 
   const canProcessDaily = callLogFiles.length > 0 && Boolean(dailyTemplateFile) && !dailyProcessing;
   const canProcessCoverage =
-    Boolean(coverageSourceFile) && Boolean(coverageTemplateFile) && !coverageProcessing;
+    coverageSourceFiles.length > 0 && Boolean(coverageTemplateFile) && !coverageProcessing;
   const canProcessMonthlyPlanned =
-    Boolean(monthlyPlannedCallLogFile) &&
+    monthlyPlannedCallLogFiles.length > 0 &&
     Boolean(monthlyPlannedTemplateFile) &&
     !monthlyPlannedProcessing;
 
@@ -755,8 +755,8 @@ function HomePage() {
   };
 
   const onCoverageProcess = async () => {
-    if (!coverageSourceFile) {
-      toast.error("Please upload the Doctor Coverage Excel file.");
+    if (coverageSourceFiles.length === 0) {
+      toast.error("Please upload the Doctor Coverage Excel file(s).");
       return;
     }
     if (!coverageTemplateFile) {
@@ -768,7 +768,7 @@ function HomePage() {
     setCoverageReport(null);
     setCoveragePreview(null);
     try {
-      const result = await processDoctorCoverageReport(coverageSourceFile, coverageTemplateFile);
+      const result = await processDoctorCoverageReport(coverageSourceFiles, coverageTemplateFile);
       setCoverageReport(result);
       await saveReportHistoryAndDatabase({
         id: crypto.randomUUID(),
@@ -826,8 +826,8 @@ function HomePage() {
   };
 
   const onMonthlyPlannedProcess = async () => {
-    if (!monthlyPlannedCallLogFile) {
-      toast.error("Please upload the monthly call log Excel file.");
+    if (monthlyPlannedCallLogFiles.length === 0) {
+      toast.error("Please upload the monthly call log Excel file(s).");
       return;
     }
     if (!monthlyPlannedTemplateFile) {
@@ -840,7 +840,7 @@ function HomePage() {
     setMonthlyPlannedPreview(null);
     try {
       const result = await processMonthlyPlannedReport(
-        monthlyPlannedCallLogFile,
+        monthlyPlannedCallLogFiles,
         monthlyPlannedTemplateFile,
       );
       setMonthlyPlannedReport(result);
@@ -1451,40 +1451,54 @@ function HomePage() {
                 step={2}
                 title="Doctor Coverage Excel"
                 subtitle={
-                  coverageSourceFile ? "Coverage source selected" : "Upload the coverage workbook"
+                  coverageSourceFiles.length
+                    ? `${coverageSourceFiles.length} coverage file(s) selected`
+                    : "Upload all coverage workbook(s)"
                 }
                 icon={<FileSpreadsheet className="h-5 w-5" />}
                 accept=".xlsx,.xls"
-                ready={Boolean(coverageSourceFile)}
+                ready={coverageSourceFiles.length > 0}
                 onClick={() => coverageSourceInputRef.current?.click()}
               >
                 <input
                   ref={coverageSourceInputRef}
                   type="file"
                   accept=".xlsx,.xls"
+                  multiple
                   className="hidden"
                   onChange={(event) => {
-                    const file = event.target.files?.[0];
-                    if (!file) return;
-                    setCoverageSourceFile(file);
+                    const files = Array.from(event.target.files ?? []);
+                    if (!files.length) return;
+                    setCoverageSourceFiles(files);
                     setCoverageReport(null);
                     setCoveragePreview(null);
+                    event.target.value = "";
                   }}
                 />
-                {coverageSourceFile ? (
-                  <FilePill
-                    name={coverageSourceFile.name}
-                    onRemove={() => {
-                      setCoverageSourceFile(null);
-                      setCoverageReport(null);
-                      setCoveragePreview(null);
-                    }}
-                    color="accent"
-                  />
+                {coverageSourceFiles.length ? (
+                  <div className="grid gap-2">
+                    {coverageSourceFiles.map((file) => (
+                      <FilePill
+                        key={`${file.name}-${file.lastModified}`}
+                        name={file.name}
+                        onRemove={() => {
+                          setCoverageSourceFiles((files) =>
+                            files.filter(
+                              (item) =>
+                                item.name !== file.name || item.lastModified !== file.lastModified,
+                            ),
+                          );
+                          setCoverageReport(null);
+                          setCoveragePreview(null);
+                        }}
+                        color="accent"
+                      />
+                    ))}
+                  </div>
                 ) : (
                   <EmptyHint
                     icon={<FileSpreadsheet className="h-5 w-5" />}
-                    label="Choose coverage file"
+                    label="Choose coverage file(s)"
                   />
                 )}
               </UploadCard>
@@ -1621,7 +1635,10 @@ function HomePage() {
                 <ShieldCheck className="h-5 w-5 text-primary" />
               </div>
               <div className="space-y-3">
-                <ChecklistItem done={Boolean(coverageSourceFile)} label="Coverage file attached" />
+                <ChecklistItem
+                  done={coverageSourceFiles.length > 0}
+                  label="Coverage file(s) attached"
+                />
                 <ChecklistItem done={Boolean(coverageTemplateFile)} label="Sample file attached" />
                 <ChecklistItem done={Boolean(coverageReport)} label="Report generated" />
                 <ChecklistItem done={Boolean(coveragePreview)} label="Preview opened" />
@@ -1704,41 +1721,54 @@ function HomePage() {
                 step={2}
                 title="Monthly Call Log Excel"
                 subtitle={
-                  monthlyPlannedCallLogFile ? "Call log selected" : "Upload the monthly call log"
+                  monthlyPlannedCallLogFiles.length
+                    ? `${monthlyPlannedCallLogFiles.length} call log file(s) selected`
+                    : "Upload all monthly call logs"
                 }
                 icon={<FileSpreadsheet className="h-5 w-5" />}
                 accept=".xlsx,.xls,.xlsm"
-                ready={Boolean(monthlyPlannedCallLogFile)}
+                ready={monthlyPlannedCallLogFiles.length > 0}
                 onClick={() => monthlyPlannedCallLogInputRef.current?.click()}
               >
                 <input
                   ref={monthlyPlannedCallLogInputRef}
                   type="file"
                   accept=".xlsx,.xls,.xlsm"
+                  multiple
                   className="hidden"
                   onChange={(event) => {
-                    const file = event.target.files?.[0];
-                    if (!file) return;
-                    setMonthlyPlannedCallLogFile(file);
+                    const files = Array.from(event.target.files ?? []);
+                    if (!files.length) return;
+                    setMonthlyPlannedCallLogFiles(files);
                     setMonthlyPlannedReport(null);
                     setMonthlyPlannedPreview(null);
                     event.target.value = "";
                   }}
                 />
-                {monthlyPlannedCallLogFile ? (
-                  <FilePill
-                    name={monthlyPlannedCallLogFile.name}
-                    onRemove={() => {
-                      setMonthlyPlannedCallLogFile(null);
-                      setMonthlyPlannedReport(null);
-                      setMonthlyPlannedPreview(null);
-                    }}
-                    color="accent"
-                  />
+                {monthlyPlannedCallLogFiles.length ? (
+                  <div className="grid gap-2">
+                    {monthlyPlannedCallLogFiles.map((file) => (
+                      <FilePill
+                        key={`${file.name}-${file.lastModified}`}
+                        name={file.name}
+                        onRemove={() => {
+                          setMonthlyPlannedCallLogFiles((files) =>
+                            files.filter(
+                              (item) =>
+                                item.name !== file.name || item.lastModified !== file.lastModified,
+                            ),
+                          );
+                          setMonthlyPlannedReport(null);
+                          setMonthlyPlannedPreview(null);
+                        }}
+                        color="accent"
+                      />
+                    ))}
+                  </div>
                 ) : (
                   <EmptyHint
                     icon={<FileSpreadsheet className="h-5 w-5" />}
-                    label="Choose call log"
+                    label="Choose call log file(s)"
                   />
                 )}
               </UploadCard>
@@ -1877,8 +1907,8 @@ function HomePage() {
               </div>
               <div className="space-y-3">
                 <ChecklistItem
-                  done={Boolean(monthlyPlannedCallLogFile)}
-                  label="Call log attached"
+                  done={monthlyPlannedCallLogFiles.length > 0}
+                  label="Call log file(s) attached"
                 />
                 <ChecklistItem
                   done={Boolean(monthlyPlannedTemplateFile)}

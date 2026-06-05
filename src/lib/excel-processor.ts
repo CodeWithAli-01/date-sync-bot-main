@@ -50,7 +50,7 @@ function normalizeEmployeeCode(value: string | null): string | null {
     String(value ?? "")
       .match(/\d+/g)
       ?.join("") ?? "";
-  return digits.length >= 4 ? digits : null;
+  return digits.length >= 3 ? digits : null;
 }
 
 function codeSuffixes(code: string): string[] {
@@ -220,6 +220,7 @@ function cellText(cell: ExcelJS.Cell): string {
     if ("richText" in value && Array.isArray(value.richText)) {
       return value.richText.map((part) => part.text ?? "").join("");
     }
+    return "";
   }
   return String(value);
 }
@@ -230,7 +231,9 @@ function cellDateKey(cell: ExcelJS.Cell): string | null {
   const text = cellText(cell).trim();
   const iso = text.match(/\b(\d{4}-\d{2}-\d{2})\b/);
   if (iso) return iso[1];
-  const short = text.match(/\b(\d{1,2})\s*[- ]\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b/i);
+  const short = text.match(
+    /\b(\d{1,2})\s*[- ]\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b/i,
+  );
   if (!short) return null;
   const months: Record<string, string> = {
     jan: "01",
@@ -362,6 +365,81 @@ function detectActiveSheet(wb: ExcelJS.Workbook): DetectedSheet {
     dataStartRow: 2,
     dataEndRow: ws.rowCount || 2,
   };
+}
+
+function detectWorksheet(
+  ws: ExcelJS.Worksheet,
+  requireReportHeaders: boolean,
+): DetectedSheet | null {
+  const maxScan = Math.min(10, ws.rowCount || 10);
+  for (let r = 1; r <= maxScan; r++) {
+    const row = ws.getRow(r);
+    if (!row.cellCount) continue;
+
+    let nameCol = 0;
+    let codeCol = 0;
+    let regionCol = 0;
+    let cityCol = 0;
+    let designationCol = 0;
+    let hasPlanned = false;
+    let hasUnplanned = false;
+    let hasCalls = false;
+    let hasSelfies = false;
+
+    const maxC = Math.max(row.cellCount || 0, requireReportHeaders ? 80 : 40);
+    for (let c = 1; c <= maxC; c++) {
+      const v = normalize(cellText(row.getCell(c)));
+      if (!v) continue;
+      if (!regionCol && REGION_HINTS.includes(v)) regionCol = c;
+      if (!codeCol && (CODE_HINTS.includes(v) || /\bcode\b/.test(v) || /\bemp.*id\b/.test(v))) {
+        codeCol = c;
+      }
+      if (!nameCol && (NAME_HINTS.includes(v) || (v.includes("name") && !v.includes("file")))) {
+        nameCol = c;
+      }
+      if (!cityCol && CITY_HINTS.includes(v)) cityCol = c;
+      if (!designationCol && DESIGNATION_HINTS.includes(v)) designationCol = c;
+      if (v === "planned") hasPlanned = true;
+      if (v === "unplanned") hasUnplanned = true;
+      if (v === "calls") hasCalls = true;
+      if (v === "selfies") hasSelfies = true;
+    }
+
+    if (!nameCol) continue;
+    if (requireReportHeaders && !(hasPlanned && hasUnplanned && hasCalls && hasSelfies)) continue;
+
+    let hasValues = 0;
+    for (let rr = r + 1; rr <= Math.min(r + 50, ws.rowCount || r + 50); rr++) {
+      if (cellText(ws.getRow(rr).getCell(nameCol)).trim()) hasValues++;
+    }
+    if (hasValues < 1) continue;
+
+    return {
+      ws,
+      headerRow: r,
+      nameCol,
+      codeCol: codeCol || null,
+      regionCol: regionCol || null,
+      cityCol: cityCol || null,
+      designationCol: designationCol || null,
+      dataStartRow: r + 1,
+      dataEndRow: ws.rowCount || r + 1,
+    };
+  }
+
+  return null;
+}
+
+function detectReportSheets(wb: ExcelJS.Workbook): DetectedSheet[] {
+  const sheets = wb.worksheets.filter((ws) => normalize(ws.name) !== "pdf extracted data");
+  const reportSheets = sheets
+    .map((ws) => detectWorksheet(ws, true))
+    .filter((sheet): sheet is DetectedSheet => Boolean(sheet));
+  if (reportSheets.length > 1) return reportSheets;
+
+  return sheets
+    .map((ws) => detectWorksheet(ws, false))
+    .filter((sheet): sheet is DetectedSheet => Boolean(sheet));
 }
 
 function readEmployees(ws: ExcelJS.Worksheet, det: DetectedSheet): Emp[] {
@@ -498,10 +576,7 @@ function findDatePairColumns(
   return pairs;
 }
 
-function findMonthlyTotalColumns(
-  ws: ExcelJS.Worksheet,
-  headerRow: number,
-): MonthlyTotalCols {
+function findMonthlyTotalColumns(ws: ExcelJS.Worksheet, headerRow: number): MonthlyTotalCols {
   const dateHeader = ws.getRow(Math.max(1, headerRow - 1));
   const header = ws.getRow(headerRow);
   const lastUsed = findLastUsedColumn(ws);
@@ -516,10 +591,7 @@ function findMonthlyTotalColumns(
     if ((top === "total monthly" || label === "total calls") && label === "total calls") {
       callsCol = c;
     }
-    if (
-      (top === "total monthly" || label === "total calls avg") &&
-      label === "total calls avg"
-    ) {
+    if ((top === "total monthly" || label === "total calls avg") && label === "total calls avg") {
       callsAvgCol = c;
     }
     if ((top === "total monthly" || label === "total selfies") && label === "total selfies") {
@@ -642,7 +714,9 @@ function fillMonthlyTotals(
     const callsAvgCell = row.getCell(monthlyTotals.callsAvgCol);
     const callsAvgFormula = averageFormula(callCols, r);
     const callsAvgResult = rowAverage(ws, callCols, r);
-    callsAvgCell.value = callsAvgFormula ? { formula: callsAvgFormula, result: callsAvgResult } : null;
+    callsAvgCell.value = callsAvgFormula
+      ? { formula: callsAvgFormula, result: callsAvgResult }
+      : null;
     styleBodyCell(callsAvgCell);
 
     const selfiesCell = row.getCell(monthlyTotals.selfiesCol);
@@ -684,12 +758,393 @@ function ensureMasterHeaders(ws: ExcelJS.Worksheet, det: DetectedSheet) {
   }
 }
 
+function createEmployeeMatcher(employees: Emp[]) {
+  const empByCode = new Map<string, number>();
+  const empByCodeSuffix = new Map<string, number>();
+  const empByName = new Map<string, number>();
+  const empByCleanName = new Map<string, number>();
+  const duplicateCodes = new Set<string>();
+  const duplicateCodeSuffixes = new Set<string>();
+  const duplicateNames = new Set<string>();
+  const duplicateCleanNames = new Set<string>();
+  let codeFallbackMatches = 0;
+  let codeSuffixMatches = 0;
+
+  employees.forEach((e, i) => {
+    if (e.code) {
+      if (empByCode.has(e.code)) duplicateCodes.add(e.code);
+      else empByCode.set(e.code, i);
+      for (const suffix of [e.code, ...codeSuffixes(e.code)]) {
+        if (empByCodeSuffix.has(suffix)) duplicateCodeSuffixes.add(suffix);
+        else empByCodeSuffix.set(suffix, i);
+      }
+    }
+    if (empByName.has(e.nameKey)) duplicateNames.add(e.nameKey);
+    empByName.set(e.nameKey, i);
+    const cleanName = e.cleanNameKey;
+    if (empByCleanName.has(cleanName)) duplicateCleanNames.add(cleanName);
+    empByCleanName.set(cleanName, i);
+  });
+
+  function findEmployeeByUniqueName(name: string): number {
+    const nameKey = normalize(name);
+    const byName = empByName.get(nameKey);
+    if (byName !== undefined && !duplicateNames.has(nameKey)) return byName;
+
+    const cleanName = personNameKey(name);
+    const byCleanName = empByCleanName.get(cleanName);
+    if (byCleanName !== undefined && !duplicateCleanNames.has(cleanName)) return byCleanName;
+
+    const prefixMatches = employees
+      .map((employee, idx) => ({ idx, cleanName: employee.cleanNameKey }))
+      .filter(
+        (employee) =>
+          employee.cleanName.length >= 8 &&
+          !duplicateCleanNames.has(employee.cleanName) &&
+          (cleanName.startsWith(`${employee.cleanName} `) ||
+            employee.cleanName.startsWith(`${cleanName} `)),
+      );
+
+    if (prefixMatches.length === 1) return prefixMatches[0].idx;
+
+    const scored = employees
+      .map((employee, idx) => ({ idx, score: nameMatchScore(cleanName, employee.cleanNameKey) }))
+      .filter((candidate) => candidate.score >= 0.86)
+      .sort((a, b) => b.score - a.score);
+
+    if (!scored.length) return -1;
+    const [best, second] = scored;
+    return !second || best.score - second.score >= 0.05 ? best.idx : -1;
+  }
+
+  function findEmployee(row: { code: string | null; name: string }, countFallback = true): number {
+    const code = normalizeEmployeeCode(row.code);
+    if (code) {
+      const byCode = empByCode.get(code);
+      if (byCode !== undefined) return byCode;
+      for (const suffix of [code, ...codeSuffixes(code)]) {
+        const bySuffix = empByCodeSuffix.get(suffix);
+        if (bySuffix !== undefined && !duplicateCodeSuffixes.has(suffix)) {
+          if (countFallback) codeSuffixMatches++;
+          return bySuffix;
+        }
+      }
+      const byName = findEmployeeByUniqueName(row.name);
+      if (byName >= 0 && countFallback) codeFallbackMatches++;
+      return byName;
+    }
+
+    return findEmployeeByUniqueName(row.name);
+  }
+
+  return {
+    findEmployee,
+    metrics: () => ({
+      duplicateCodes,
+      codeFallbackMatches,
+      codeSuffixMatches,
+    }),
+  };
+}
+
+interface ExcelSheetState {
+  det: DetectedSheet;
+  employees: Emp[];
+  matcher: ReturnType<typeof createEmployeeMatcher>;
+}
+
+function normalizeTeamName(value: string): string {
+  return normalize(value).replace(/[^a-z0-9]+/g, "");
+}
+
+function teamNamesMatch(sourceValue: string, sheetName: string): boolean {
+  const sourceKey = normalizeTeamName(sourceValue);
+  const sheetKey = normalizeTeamName(sheetName);
+  if (!sourceKey || !sheetKey) return false;
+  return sourceKey.includes(sheetKey) || sheetKey.includes(sourceKey);
+}
+
+function assignPdfsToReportSheets(
+  states: ExcelSheetState[],
+  pdfResults: PdfParseResult[],
+): Map<ExcelSheetState, PdfParseResult[]> {
+  const assigned = new Map(states.map((state) => [state, [] as PdfParseResult[]]));
+
+  for (const pdf of pdfResults) {
+    const directMatches = states.filter((state) => teamNamesMatch(pdf.fileName, state.det.ws.name));
+    if (directMatches.length) {
+      directMatches.forEach((state) => assigned.get(state)?.push(pdf));
+      continue;
+    }
+
+    const scored = states
+      .map((state) => ({
+        state,
+        score: pdf.rows.reduce(
+          (count, row) => count + (state.matcher.findEmployee(row, false) >= 0 ? 1 : 0),
+          0,
+        ),
+      }))
+      .filter((item) => item.score > 0);
+
+    scored.forEach((item) => assigned.get(item.state)?.push(pdf));
+  }
+
+  return assigned;
+}
+
+function fillMonthlyReportSheet(
+  state: ExcelSheetState,
+  pdfResults: PdfParseResult[],
+  dates: string[],
+) {
+  const { det, employees, matcher } = state;
+  const ws = det.ws;
+  const warnings: string[] = [];
+  const matchByEmp = new Map<number, Map<string, MatchValue>>();
+  const unmatched = new Set<string>();
+  const unmatchedRows: UnmatchedPdfRow[] = [];
+
+  for (const pdf of pdfResults) {
+    if (pdf.rows.length < employees.length) {
+      warnings.push(
+        `PDF parsing incomplete, please review. ${pdf.fileName}: ${pdf.rows.length}/${employees.length} rows extracted for ${ws.name}.`,
+      );
+    }
+
+    for (const row of pdf.rows) {
+      const idx = matcher.findEmployee(row);
+      if (idx < 0) {
+        unmatched.add(row.code ? `${row.code} - ${row.name}` : row.name);
+        unmatchedRows.push({ date: pdf.date, fileName: pdf.fileName, row });
+        continue;
+      }
+
+      const dateMap = matchByEmp.get(idx) ?? new Map<string, MatchValue>();
+      const existing = dateMap.get(pdf.date);
+      if (!existing || row.count > existing.selfies) {
+        dateMap.set(pdf.date, {
+          planned: row.planned,
+          unplanned: row.unplanned,
+          selfies: row.count,
+          selfieText: row.selfieText,
+          total: row.total,
+        });
+      } else if (existing.total === 0 && row.total > 0) {
+        dateMap.set(pdf.date, {
+          ...existing,
+          planned: row.planned,
+          unplanned: row.unplanned,
+          total: row.total,
+        });
+      }
+      matchByEmp.set(idx, dateMap);
+    }
+  }
+
+  ensureMasterHeaders(ws, det);
+  const datePairs = findDatePairColumns(ws, det.headerRow, dates);
+
+  const empTotals = employees.map((employee, idx) => {
+    const matches = matchByEmp.get(idx);
+    let total = 0;
+    for (const date of dates) {
+      const match = matches?.get(date);
+      if (match) total += match.total;
+    }
+    return { ...employee, idx, total };
+  });
+
+  for (const emp of empTotals) {
+    const row = ws.getRow(emp.row);
+    const matches = matchByEmp.get(emp.idx);
+
+    for (const date of dates) {
+      const match = matches?.get(date);
+      const pair = datePairs.get(date);
+      if (!pair) continue;
+      const value = match ?? null;
+
+      if (pair.plannedCol) {
+        const plannedCell = row.getCell(pair.plannedCol);
+        plannedCell.value = value ? value.planned : null;
+        styleBodyCell(plannedCell);
+      }
+
+      if (pair.unplannedCol) {
+        const unplannedCell = row.getCell(pair.unplannedCol);
+        unplannedCell.value = value ? value.unplanned : null;
+        styleBodyCell(unplannedCell);
+      }
+
+      if (pair.callsCol) {
+        const callsCell = row.getCell(pair.callsCol);
+        callsCell.value = value ? value.total : null;
+        styleBodyCell(callsCell);
+      }
+
+      const selfieCell = row.getCell(pair.selfiesCol);
+      selfieCell.value = value ? value.selfies : null;
+      styleBodyCell(selfieCell);
+
+      if (!pair.callsCol) {
+        const totalCell = row.getCell(pair.totalCol);
+        totalCell.value = value ? value.total : null;
+        styleBodyCell(totalCell);
+      }
+    }
+
+    row.commit?.();
+  }
+
+  const finalDataEndRow = appendUnmatchedRows(ws, det, unmatchedRows, datePairs);
+  const monthlyTotals = findMonthlyTotalColumns(ws, det.headerRow);
+  fillMonthlyTotals(ws, det.dataStartRow, finalDataEndRow, monthlyTotals, datePairs);
+  applyBordersAndWidths(
+    ws,
+    det.headerRow,
+    det.dataStartRow,
+    Math.max(finalDataEndRow, det.dataEndRow, ws.rowCount),
+  );
+
+  const metrics = matcher.metrics();
+  if (unmatched.size > 0) {
+    warnings.push(
+      `${unmatched.size} PDF row(s) still need manual review on ${ws.name}. They were added at the bottom of that sheet.`,
+    );
+  }
+  if (metrics.codeFallbackMatches > 0) {
+    warnings.push(
+      `${metrics.codeFallbackMatches} PDF row(s) on ${ws.name} had an unknown employee code but were safely matched by name.`,
+    );
+  }
+  if (metrics.codeSuffixMatches > 0) {
+    warnings.push(
+      `${metrics.codeSuffixMatches} PDF row(s) on ${ws.name} had extra digits in the code and were safely matched by a unique code suffix.`,
+    );
+  }
+  if (metrics.duplicateCodes.size > 0) {
+    warnings.push(
+      `Employee mapping mismatch detected on ${ws.name}: duplicate employee code(s): ${[
+        ...metrics.duplicateCodes,
+      ]
+        .slice(0, 5)
+        .join(", ")}.`,
+    );
+  }
+
+  const matched = [...matchByEmp.values()].filter((m) =>
+    [...m.values()].some((v) => v.selfies > 0 || v.total > 0 || v.planned > 0 || v.unplanned > 0),
+  ).length;
+
+  return {
+    totalEmployees: employees.length,
+    matchedEmployees: matched,
+    unmatchedNames: [...unmatched],
+    warnings,
+    totalMatchedRows: matchByEmp.size,
+    skippedRows: unmatched.size,
+    preview: empTotals
+      .slice(0, 10)
+      .map((s) => ({ name: `${ws.name} - ${s.name}`, total: s.total })),
+  };
+}
+
+async function processExcelMultiSheet(
+  excelFile: File,
+  options: ProcessOptions,
+  wb: ExcelJS.Workbook,
+  detections: DetectedSheet[],
+): Promise<ProcessReport> {
+  const states = detections
+    .map((det) => {
+      const employees = readEmployees(det.ws, det);
+      return { det, employees, matcher: createEmployeeMatcher(employees) };
+    })
+    .filter((state) => state.employees.length > 0);
+
+  if (!states.length) {
+    throw new Error(
+      "No employees found in the Excel sheets. Make sure the file has a 'Name' column.",
+    );
+  }
+
+  const dates = [...new Set(options.pdfResults.map((r) => r.date))].sort();
+  const days = dates.map((date) => Number(date.slice(8, 10)));
+  const assigned = assignPdfsToReportSheets(states, options.pdfResults);
+  const warnings: string[] = [];
+  const unmatchedNames = new Set<string>();
+  const preview: { name: string; total: number }[] = [];
+  let totalEmployees = 0;
+  let matchedEmployees = 0;
+  let totalMatchedRows = 0;
+  let totalSkipped = 0;
+
+  for (const state of states) {
+    const pdfs = assigned.get(state) ?? [];
+    totalEmployees += state.employees.length;
+    if (!pdfs.length) {
+      warnings.push(
+        `No matching PDF data was found for ${state.det.ws.name}; that sheet was kept unchanged.`,
+      );
+      continue;
+    }
+
+    const result = fillMonthlyReportSheet(state, pdfs, dates);
+    matchedEmployees += result.matchedEmployees;
+    totalMatchedRows += result.totalMatchedRows;
+    totalSkipped += result.skippedRows;
+    result.unmatchedNames.forEach((name) => unmatchedNames.add(name));
+    warnings.push(...result.warnings);
+    preview.push(...result.preview);
+  }
+
+  addPdfAuditSheet(wb, options.pdfResults, (row) => {
+    for (const state of states) {
+      const idx = state.matcher.findEmployee(row, false);
+      if (idx >= 0) return state.employees[idx];
+    }
+    return null;
+  });
+
+  const buf = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buf], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+
+  return {
+    totalEmployees,
+    matchedEmployees,
+    unmatchedNames: [...unmatchedNames],
+    warnings,
+    debug: {
+      totalPdfsUploaded: options.pdfResults.length,
+      totalEmployeesDetected: options.pdfResults.reduce((sum, pdf) => sum + pdf.rows.length, 0),
+      totalMatched: totalMatchedRows,
+      totalSkipped,
+      totalRecordsInsertedUpdated: 0,
+      parsingErrors: 0,
+    },
+    dates,
+    days,
+    blob,
+    fileName: excelFile.name,
+    sheetName: states[0].det.ws.name,
+    preview: preview.sort((a, b) => b.total - a.total).slice(0, 10),
+  };
+}
+
 export async function processExcel(
   excelFile: File,
   options: ProcessOptions,
 ): Promise<ProcessReport> {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(await excelFile.arrayBuffer());
+
+  const reportSheets = detectReportSheets(wb);
+  if (reportSheets.length > 1) {
+    return processExcelMultiSheet(excelFile, options, wb, reportSheets);
+  }
 
   const det = detectActiveSheet(wb);
   const ws = det.ws;
