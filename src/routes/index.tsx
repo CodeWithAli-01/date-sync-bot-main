@@ -41,6 +41,7 @@ import type { User } from "@supabase/supabase-js";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
 import { supabase } from "@/integrations/supabase/client";
@@ -154,6 +155,7 @@ function HomePage() {
   const [authLoading, setAuthLoading] = useState(true);
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [signingOut, setSigningOut] = useState(false);
+  const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
   const [activeModule, setActiveModule] = useState<ActiveModule>(null);
   const [dashboardLine, setDashboardLine] = useState(DASHBOARD_LINES[0]);
   const [themeColor, setThemeColor] = useState(DEFAULT_THEME_COLOR);
@@ -306,6 +308,29 @@ function HomePage() {
       console.warn("Auth user database sync failed", error);
     });
   }, [authUser]);
+
+  useEffect(() => {
+    if (!authUser) {
+      setProfilePhoto(null);
+      return;
+    }
+
+    setProfilePhoto(window.localStorage.getItem(profilePhotoStorageKey(authUser)));
+  }, [authUser]);
+
+  const updateProfilePhoto = useCallback(
+    (photo: string | null) => {
+      if (!authUser) return;
+      const storageKey = profilePhotoStorageKey(authUser);
+      if (photo) {
+        window.localStorage.setItem(storageKey, photo);
+      } else {
+        window.localStorage.removeItem(storageKey);
+      }
+      setProfilePhoto(photo);
+    },
+    [authUser],
+  );
 
   const updateThemeColor = (color: string) => {
     setThemeColor(color);
@@ -997,6 +1022,7 @@ function HomePage() {
         activeModule={activeModule}
         dashboardLine={dashboardLine}
         user={authUser}
+        profilePhoto={profilePhoto}
         onNavigate={setActiveModule}
         onOpenHistory={openHistory}
       >
@@ -1016,14 +1042,17 @@ function HomePage() {
         activeModule={activeModule}
         dashboardLine={dashboardLine}
         user={authUser}
+        profilePhoto={profilePhoto}
         onNavigate={setActiveModule}
         onOpenHistory={openHistory}
       >
         <ProfilePage
           user={authUser}
+          profilePhoto={profilePhoto}
           color={themeColor}
           mode={themeMode}
           signingOut={signingOut}
+          onProfilePhotoChange={updateProfilePhoto}
           onChange={updateThemeColor}
           onToggleMode={toggleThemeMode}
           onSignOut={signOut}
@@ -1038,6 +1067,7 @@ function HomePage() {
         activeModule={activeModule}
         dashboardLine={dashboardLine}
         user={authUser}
+        profilePhoto={profilePhoto}
         onNavigate={setActiveModule}
         onOpenHistory={openHistory}
       >
@@ -1362,6 +1392,7 @@ function HomePage() {
         activeModule={activeModule}
         dashboardLine={dashboardLine}
         user={authUser}
+        profilePhoto={profilePhoto}
         onNavigate={setActiveModule}
         onOpenHistory={openHistory}
       >
@@ -1613,6 +1644,7 @@ function HomePage() {
         activeModule={activeModule}
         dashboardLine={dashboardLine}
         user={authUser}
+        profilePhoto={profilePhoto}
         onNavigate={setActiveModule}
         onOpenHistory={openHistory}
       >
@@ -1873,6 +1905,7 @@ function HomePage() {
         activeModule={activeModule}
         dashboardLine={dashboardLine}
         user={authUser}
+        profilePhoto={profilePhoto}
         onNavigate={setActiveModule}
         onOpenHistory={openHistory}
       >
@@ -2003,6 +2036,7 @@ function HomePage() {
       activeModule="monthly-report"
       dashboardLine={dashboardLine}
       user={authUser}
+      profilePhoto={profilePhoto}
       onNavigate={setActiveModule}
       onOpenHistory={openHistory}
     >
@@ -2391,6 +2425,7 @@ function AppShell({
   activeModule,
   dashboardLine,
   user,
+  profilePhoto,
   onNavigate,
   onOpenHistory,
   children,
@@ -2398,10 +2433,12 @@ function AppShell({
   activeModule: ActiveModule;
   dashboardLine: string;
   user: User;
+  profilePhoto: string | null;
   onNavigate: (module: ActiveModule) => void;
   onOpenHistory: () => void;
   children: React.ReactNode;
 }) {
+  const displayName = getUserDisplayName(user);
   const tools = [
     {
       id: "daily-report" as const,
@@ -2487,12 +2524,10 @@ function AppShell({
             activeModule === "profile" ? "is-active" : ""
           }`}
         >
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-[var(--shadow-soft)]">
-            <UserCircle className="h-5 w-5" />
-          </span>
+          <UserAvatar user={user} photo={profilePhoto} className="h-10 w-10 rounded-xl" />
           <span className="hidden min-w-0 lg:block">
             <span className="block truncate text-sm font-semibold text-foreground">
-              {user.email ?? "Profile"}
+              {displayName}
             </span>
             <span className="block text-xs text-muted-foreground">Profile & theme</span>
           </span>
@@ -2763,34 +2798,142 @@ function DashboardHome({
   );
 }
 
+function UserAvatar({
+  user,
+  photo,
+  className = "",
+}: {
+  user: User;
+  photo: string | null;
+  className?: string;
+}) {
+  const displayName = getUserDisplayName(user);
+  return (
+    <Avatar
+      className={`bg-primary text-primary-foreground shadow-[var(--shadow-soft)] ${className}`}
+    >
+      {photo && <AvatarImage src={photo} alt={displayName} className="object-cover" />}
+      <AvatarFallback className="bg-primary text-sm font-bold text-primary-foreground">
+        {getUserInitials(displayName)}
+      </AvatarFallback>
+    </Avatar>
+  );
+}
+
+function getUserDisplayName(user: User): string {
+  const metadata = user.user_metadata ?? {};
+  const metadataName =
+    stringValue(metadata.full_name) ||
+    stringValue(metadata.name) ||
+    stringValue(metadata.display_name);
+  if (metadataName) return toTitleCase(metadataName);
+
+  const localPart = (user.email ?? "Profile").split("@")[0] || "Profile";
+  const words = localPart
+    .replace(/[._-]+/g, " ")
+    .replace(/\d+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return toTitleCase(splitCompactDisplayName(words || localPart || "Profile"));
+}
+
+function getUserInitials(displayName: string): string {
+  const words = displayName.split(/\s+/).filter(Boolean);
+  return (words[0]?.[0] ?? "U").toUpperCase() + (words[1]?.[0] ?? "").toUpperCase();
+}
+
+function toTitleCase(value: string): string {
+  return value
+    .trim()
+    .split(/\s+/)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function splitCompactDisplayName(value: string): string {
+  if (value.includes(" ")) return value;
+  const compact = value.toLowerCase();
+  const commonSuffixes = ["awan", "khan", "ahmad", "ahmed", "ali", "butt"];
+  const suffix = commonSuffixes.find(
+    (item) => compact.endsWith(item) && compact.length > item.length + 1,
+  );
+  return suffix ? `${compact.slice(0, -suffix.length)} ${suffix}` : value;
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function profilePhotoStorageKey(user: User): string {
+  return `profile-photo:${user.id}`;
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
 function ProfilePage({
   user,
+  profilePhoto,
   color,
   mode,
   signingOut,
+  onProfilePhotoChange,
   onChange,
   onToggleMode,
   onSignOut,
 }: {
   user: User;
+  profilePhoto: string | null;
   color: string;
   mode: "light" | "dark";
   signingOut: boolean;
+  onProfilePhotoChange: (photo: string | null) => void;
   onChange: (color: string) => void;
   onToggleMode: () => void;
   onSignOut: () => void;
 }) {
+  const photoInputRef = useRef<HTMLInputElement>(null);
+  const displayName = getUserDisplayName(user);
+
+  const onProfilePhotoSelected = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      toast.error("Please choose an image file.");
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error("Profile photo must be 2 MB or smaller.");
+      return;
+    }
+
+    try {
+      onProfilePhotoChange(await readFileAsDataUrl(file));
+      toast.success("Profile photo updated.");
+    } catch (error) {
+      console.error("Profile photo read failed", error);
+      toast.error("Unable to use this profile photo.");
+    }
+  };
+
   return (
     <main className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
       <section className="neuro-panel p-4 sm:p-6">
         <div className="flex min-w-0 items-center gap-3 sm:gap-4">
-          <BrandMark icon={<UserCircle className="h-5 w-5" />} />
+          <UserAvatar user={user} photo={profilePhoto} className="h-14 w-14 rounded-2xl" />
           <div className="min-w-0">
             <div className="text-xs font-bold uppercase tracking-wide text-primary">
               User profile
             </div>
-            <h1 className="mt-1 break-all text-xl font-bold text-foreground sm:text-2xl">
-              {user.email ?? "Account"}
+            <h1 className="mt-1 truncate text-xl font-bold text-foreground sm:text-2xl">
+              {displayName}
             </h1>
             <p className="text-sm text-muted-foreground">
               Account controls and interface settings.
@@ -2800,10 +2943,8 @@ function ProfilePage({
 
         <div className="mt-8 grid gap-4 sm:grid-cols-2">
           <div className="neuro-inset p-4">
-            <div className="text-xs font-bold uppercase tracking-wide text-primary">Email</div>
-            <div className="mt-2 truncate text-sm font-semibold text-foreground">
-              {user.email ?? "Signed in"}
-            </div>
+            <div className="text-xs font-bold uppercase tracking-wide text-primary">Name</div>
+            <div className="mt-2 truncate text-sm font-semibold text-foreground">{displayName}</div>
           </div>
           <div className="neuro-inset p-4">
             <div className="text-xs font-bold uppercase tracking-wide text-primary">Theme</div>
@@ -2815,6 +2956,47 @@ function ProfilePage({
       </section>
 
       <aside className="space-y-6">
+        <section className="neuro-panel p-5">
+          <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-foreground">
+            <UserCircle className="h-4 w-4 text-primary" />
+            Profile photo
+          </div>
+          <div className="mb-4 flex items-center gap-4">
+            <UserAvatar user={user} photo={profilePhoto} className="h-16 w-16 rounded-2xl" />
+            <div className="min-w-0 text-sm text-muted-foreground">
+              This photo appears in the profile shortcut.
+            </div>
+          </div>
+          <input
+            ref={photoInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={onProfilePhotoSelected}
+          />
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
+            <Button
+              type="button"
+              onClick={() => photoInputRef.current?.click()}
+              className="neuro-button w-full"
+            >
+              <Upload className="mr-2 h-4 w-4" />
+              Upload photo
+            </Button>
+            {profilePhoto && (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => onProfilePhotoChange(null)}
+                className="neuro-button-muted w-full"
+              >
+                <X className="mr-2 h-4 w-4" />
+                Remove photo
+              </Button>
+            )}
+          </div>
+        </section>
+
         <section className="neuro-panel p-5">
           <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-foreground">
             <Settings className="h-4 w-4 text-primary" />
@@ -3125,10 +3307,11 @@ function AccountControls({
   signingOut: boolean;
   onSignOut: () => void;
 }) {
+  const displayName = getUserDisplayName(user);
   return (
     <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
       <div className="max-w-full truncate rounded-md border border-white/40 bg-white/10 px-3 py-2 text-sm font-medium text-[var(--header-foreground)]">
-        {user.email ?? "Signed in"}
+        {displayName}
       </div>
       <Button
         size="sm"
