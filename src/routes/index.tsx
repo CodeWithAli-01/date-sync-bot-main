@@ -178,7 +178,6 @@ function HomePage() {
   const [dailyProcessing, setDailyProcessing] = useState(false);
   const [dailyReport, setDailyReport] = useState<DailyReportResult | null>(null);
   const [bulkDailyReport, setBulkDailyReport] = useState<BulkDailyReportResult | null>(null);
-  const [bulkDailyProcessing, setBulkDailyProcessing] = useState(false);
   const [bulkDailyProgress, setBulkDailyProgress] = useState(0);
   const [bulkDailyProgressLabel, setBulkDailyProgressLabel] = useState("");
   const [dailyPreview, setDailyPreview] = useState<SheetPreview | null>(null);
@@ -432,8 +431,6 @@ function HomePage() {
   }, [authUser, refreshHistory]);
 
   const canProcessDaily = Boolean(callLogFile) && Boolean(dailyTemplateFile) && !dailyProcessing;
-  const canProcessBulkDaily =
-    Boolean(callLogFile) && Boolean(dailyTemplateFile) && !bulkDailyProcessing;
   const canProcessCoverage =
     Boolean(coverageSourceFile) && Boolean(coverageTemplateFile) && !coverageProcessing;
   const canProcessMonthlyPlanned =
@@ -630,12 +627,50 @@ function HomePage() {
 
     setDailyProcessing(true);
     setDailyReport(null);
+    setBulkDailyReport(null);
     setDailyPreview(null);
+    setBulkDailyProgress(0);
+    setBulkDailyProgressLabel("Detecting teams...");
     try {
+      const bulkResult = await processBulkDailyReports(callLogFile, dailyTemplateFile, (status) => {
+        setBulkDailyProgress(Math.round((status.current / Math.max(status.total, 1)) * 100));
+        setBulkDailyProgressLabel(
+          `Generating ${status.teamName} (${status.current}/${status.total})`,
+        );
+      });
+
+      if (bulkResult.totalTeams > 1 || bulkResult.failedReports > 0) {
+        setBulkDailyProgress(100);
+        setBulkDailyProgressLabel("Reports ready.");
+        setBulkDailyReport(bulkResult);
+        await saveReportHistoryAndDatabase({
+          id: crypto.randomUUID(),
+          userId: authUser?.id,
+          fileName: bulkResult.fileName,
+          createdAt: new Date().toISOString(),
+          reportType: "Daily Reports",
+          dates: [],
+          pdfCount: 0,
+          totalEmployees: bulkResult.summary.reduce((sum, item) => sum + item.totalEmployees, 0),
+          matchedEmployees: bulkResult.summary.reduce(
+            (sum, item) => sum + item.matchedEmployees,
+            0,
+          ),
+          size: bulkResult.blob.size,
+          blob: bulkResult.blob,
+        });
+        toast.success(
+          `Daily reports ready. ${bulkResult.reportsGenerated}/${bulkResult.totalTeams} team report(s) generated.`,
+        );
+        return;
+      }
+
+      setBulkDailyProgressLabel("Preparing report preview...");
       const result = await processDailyReport(callLogFile, dailyTemplateFile);
       setDailyReport(result);
       await saveReportHistoryAndDatabase({
         id: crypto.randomUUID(),
+        userId: authUser?.id,
         fileName: result.fileName,
         createdAt: new Date().toISOString(),
         reportType: "Daily Report",
@@ -656,66 +691,13 @@ function HomePage() {
     }
   };
 
-  const onBulkDailyProcess = async () => {
-    if (!authUser) {
-      toast.error("Please sign in before generating reports.");
-      return;
-    }
-    if (!callLogFile) {
-      toast.error("Please upload the call log Excel file.");
-      return;
-    }
-    if (!dailyTemplateFile) {
-      toast.error("Please upload the multi-team daily sample file.");
-      return;
-    }
-
-    setBulkDailyProcessing(true);
-    setBulkDailyReport(null);
-    setBulkDailyProgress(0);
-    setBulkDailyProgressLabel("Detecting teams...");
-    try {
-      const result = await processBulkDailyReports(callLogFile, dailyTemplateFile, (status) => {
-        setBulkDailyProgress(Math.round((status.current / Math.max(status.total, 1)) * 100));
-        setBulkDailyProgressLabel(
-          `Generating ${status.teamName} (${status.current}/${status.total})`,
-        );
-      });
-
-      setBulkDailyProgress(100);
-      setBulkDailyProgressLabel("Bulk reports ready.");
-      setBulkDailyReport(result);
-      await saveReportHistoryAndDatabase({
-        id: crypto.randomUUID(),
-        userId: authUser.id,
-        fileName: result.fileName,
-        createdAt: new Date().toISOString(),
-        reportType: "Bulk Daily Reports",
-        dates: [],
-        pdfCount: 0,
-        totalEmployees: result.summary.reduce((sum, item) => sum + item.totalEmployees, 0),
-        matchedEmployees: result.summary.reduce((sum, item) => sum + item.matchedEmployees, 0),
-        size: result.blob.size,
-        blob: result.blob,
-      });
-      toast.success(
-        `Bulk daily reports ready. ${result.reportsGenerated}/${result.totalTeams} team report(s) generated.`,
-      );
-    } catch (error) {
-      console.error("Bulk daily report failed", error);
-      toast.error(
-        error instanceof Error ? error.message : "Unable to generate bulk daily reports.",
-      );
-    } finally {
-      setBulkDailyProcessing(false);
-    }
-  };
-
   const openDailyPreview = async () => {
-    if (!dailyReport) return;
+    if (!dailyReport && !bulkDailyReport) return;
     setDailyPreviewLoading(true);
     try {
-      const preview = await buildSheetPreview(dailyReport.blob, dailyReport.sheetName);
+      const preview = dailyReport
+        ? await buildSheetPreview(dailyReport.blob, dailyReport.sheetName)
+        : await buildZipSheetPreview(bulkDailyReport!.blob, "Bulk_Daily_Report_Summary.xlsx");
       setDailyPreview(preview);
       requestAnimationFrame(() => {
         dailyPreviewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -729,23 +711,12 @@ function HomePage() {
   };
 
   const downloadDailyReport = () => {
-    if (!dailyReport) return;
-    const url = URL.createObjectURL(dailyReport.blob);
+    const output = dailyReport ?? bulkDailyReport;
+    if (!output) return;
+    const url = URL.createObjectURL(output.blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = dailyReport.fileName;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
-  const downloadBulkDailyReports = () => {
-    if (!bulkDailyReport) return;
-    const url = URL.createObjectURL(bulkDailyReport.blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = bulkDailyReport.fileName;
+    a.download = output.fileName;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -1174,48 +1145,27 @@ function HomePage() {
                     column, only matching teams are generated.
                   </p>
                 </div>
-                <div className="grid w-full gap-2 sm:w-auto sm:grid-cols-2">
-                  <Button
-                    size="lg"
-                    onClick={onDailyProcess}
-                    disabled={!canProcessDaily || bulkDailyProcessing}
-                    className="w-full min-w-44 shadow-[var(--shadow-elegant)] sm:w-auto"
-                  >
-                    {dailyProcessing ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Processing...
-                      </>
-                    ) : (
-                      <>
-                        <Sparkles className="mr-2 h-4 w-4" />
-                        Generate One
-                      </>
-                    )}
-                  </Button>
-                  <Button
-                    size="lg"
-                    variant="outline"
-                    onClick={onBulkDailyProcess}
-                    disabled={!canProcessBulkDaily || dailyProcessing}
-                    className="w-full min-w-44 sm:w-auto"
-                  >
-                    {bulkDailyProcessing ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Bulk...
-                      </>
-                    ) : (
-                      <>
-                        <FileSpreadsheet className="mr-2 h-4 w-4" />
-                        Generate All Teams
-                      </>
-                    )}
-                  </Button>
-                </div>
+                <Button
+                  size="lg"
+                  onClick={onDailyProcess}
+                  disabled={!canProcessDaily}
+                  className="w-full min-w-48 shadow-[var(--shadow-elegant)] sm:w-auto"
+                >
+                  {dailyProcessing ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Generating...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="mr-2 h-4 w-4" />
+                      Generate Report
+                    </>
+                  )}
+                </Button>
               </div>
 
-              {bulkDailyProcessing && (
+              {dailyProcessing && bulkDailyProgressLabel && (
                 <div className="mt-5 space-y-2">
                   <Progress value={bulkDailyProgress} />
                   <div className="text-xs text-muted-foreground">{bulkDailyProgressLabel}</div>
@@ -1223,67 +1173,7 @@ function HomePage() {
               )}
             </Card>
 
-            {bulkDailyReport && (
-              <Card className="border-border bg-card p-6 shadow-[var(--shadow-soft)]">
-                <div className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
-                  <div className="flex items-start gap-3">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-success/15 text-success">
-                      <CheckCircle2 className="h-5 w-5" />
-                    </div>
-                    <div>
-                      <h3 className="text-lg font-semibold text-foreground">
-                        Bulk daily reports ready
-                      </h3>
-                      <p className="text-sm text-muted-foreground">
-                        {bulkDailyReport.reportsGenerated}/{bulkDailyReport.totalTeams} team
-                        report(s) generated. Output folder is packaged as a ZIP for your Downloads
-                        folder.
-                      </p>
-                    </div>
-                  </div>
-                  <Button onClick={downloadBulkDailyReports}>
-                    <Download className="mr-2 h-4 w-4" />
-                    Download ZIP
-                  </Button>
-                </div>
-
-                <div className="mt-6 grid gap-4 md:grid-cols-3">
-                  <Stat label="Teams processed" value={bulkDailyReport.totalTeams} />
-                  <Stat label="Reports generated" value={bulkDailyReport.reportsGenerated} />
-                  <Stat
-                    label="Failed reports"
-                    value={bulkDailyReport.failedReports}
-                    tone={bulkDailyReport.failedReports ? "warning" : "default"}
-                  />
-                </div>
-
-                <div className="mt-6 max-h-72 overflow-y-auto rounded-md border border-border">
-                  {bulkDailyReport.summary.map((item) => (
-                    <div
-                      key={item.teamName}
-                      className="grid gap-2 border-b border-border p-3 text-sm last:border-b-0 md:grid-cols-[minmax(0,1fr)_110px_120px_minmax(0,1.3fr)]"
-                    >
-                      <div className="min-w-0 font-semibold text-foreground">{item.teamName}</div>
-                      <div
-                        className={
-                          item.status === "success" ? "text-success" : "text-warning-foreground"
-                        }
-                      >
-                        {item.status}
-                      </div>
-                      <div className="text-muted-foreground">
-                        {item.matchedEmployees}/{item.totalEmployees}
-                      </div>
-                      <div className="min-w-0 truncate text-muted-foreground">
-                        {item.error ?? item.fileName}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </Card>
-            )}
-
-            {dailyReport && (
+            {(dailyReport || bulkDailyReport) && (
               <Card className="border-border bg-card p-6 shadow-[var(--shadow-soft)]">
                 <div className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
                   <div className="flex items-start gap-3">
@@ -1293,8 +1183,9 @@ function HomePage() {
                     <div>
                       <h3 className="text-lg font-semibold text-foreground">Daily report ready</h3>
                       <p className="text-sm text-muted-foreground">
-                        {dailyReport.matchedEmployees}/{dailyReport.totalEmployees} employee(s)
-                        matched from the sample file.
+                        {dailyReport
+                          ? `${dailyReport.matchedEmployees}/${dailyReport.totalEmployees} employee(s) matched from the sample file.`
+                          : `${bulkDailyReport!.reportsGenerated}/${bulkDailyReport!.totalTeams} team report(s) generated. Multiple reports are packaged as one ZIP download.`}
                       </p>
                     </div>
                   </div>
@@ -1318,27 +1209,71 @@ function HomePage() {
                   </div>
                 </div>
 
-                <div className="mt-6 grid gap-4 md:grid-cols-3">
-                  <Stat label="Call log rows" value={dailyReport.debug.callRows} />
-                  <Stat label="Face-to-face calls" value={dailyReport.debug.faceToFaceRows} />
-                  <Stat label="Contact points" value={dailyReport.debug.contactPointRows} />
-                </div>
+                {dailyReport ? (
+                  <>
+                    <div className="mt-6 grid gap-4 md:grid-cols-3">
+                      <Stat label="Call log rows" value={dailyReport.debug.callRows} />
+                      <Stat label="Face-to-face calls" value={dailyReport.debug.faceToFaceRows} />
+                      <Stat label="Contact points" value={dailyReport.debug.contactPointRows} />
+                    </div>
 
-                {dailyReport.preview.length > 0 && (
-                  <div className="mt-6">
-                    <div className="mb-2 text-sm font-semibold text-foreground">Top callers</div>
-                    <div className="space-y-1.5">
-                      {dailyReport.preview.map((item, index) => (
+                    {dailyReport.preview.length > 0 && (
+                      <div className="mt-6">
+                        <div className="mb-2 text-sm font-semibold text-foreground">
+                          Top callers
+                        </div>
+                        <div className="space-y-1.5">
+                          {dailyReport.preview.map((item, index) => (
+                            <div
+                              key={`${item.name}-${index}`}
+                              className="flex items-center justify-between rounded-md border border-border bg-muted/40 px-3 py-2 text-sm"
+                            >
+                              <span>{item.name}</span>
+                              <span className="font-semibold text-foreground">{item.total}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div className="mt-6 grid gap-4 md:grid-cols-3">
+                      <Stat label="Teams processed" value={bulkDailyReport!.totalTeams} />
+                      <Stat label="Reports generated" value={bulkDailyReport!.reportsGenerated} />
+                      <Stat
+                        label="Failed reports"
+                        value={bulkDailyReport!.failedReports}
+                        tone={bulkDailyReport!.failedReports ? "warning" : "default"}
+                      />
+                    </div>
+
+                    <div className="mt-6 max-h-72 overflow-y-auto rounded-md border border-border">
+                      {bulkDailyReport!.summary.map((item) => (
                         <div
-                          key={`${item.name}-${index}`}
-                          className="flex items-center justify-between rounded-md border border-border bg-muted/40 px-3 py-2 text-sm"
+                          key={item.teamName}
+                          className="grid gap-2 border-b border-border p-3 text-sm last:border-b-0 md:grid-cols-[minmax(0,1fr)_110px_120px_minmax(0,1.3fr)]"
                         >
-                          <span>{item.name}</span>
-                          <span className="font-semibold text-foreground">{item.total}</span>
+                          <div className="min-w-0 font-semibold text-foreground">
+                            {item.teamName}
+                          </div>
+                          <div
+                            className={
+                              item.status === "success" ? "text-success" : "text-warning-foreground"
+                            }
+                          >
+                            {item.status}
+                          </div>
+                          <div className="text-muted-foreground">
+                            {item.matchedEmployees}/{item.totalEmployees}
+                          </div>
+                          <div className="min-w-0 truncate text-muted-foreground">
+                            {item.error ?? item.fileName}
+                          </div>
                         </div>
                       ))}
                     </div>
-                  </div>
+                  </>
                 )}
               </Card>
             )}
@@ -3481,6 +3416,22 @@ async function buildSheetPreview(blob: Blob, preferredSheetName?: string): Promi
   }
 
   return { name: ws.name || "Sheet preview", sheetName: ws.name, rows };
+}
+
+async function buildZipSheetPreview(blob: Blob, preferredFileName?: string): Promise<SheetPreview> {
+  const JSZip = (await import("jszip")).default;
+  const zip = await JSZip.loadAsync(await blob.arrayBuffer());
+  const file =
+    (preferredFileName ? zip.file(preferredFileName) : null) ||
+    Object.values(zip.files).find((entry) => !entry.dir && /\.xlsx$/i.test(entry.name));
+
+  if (!file) throw new Error("No Excel report found in the ZIP file.");
+
+  const reportBlob = new Blob([await file.async("arraybuffer")], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+  const preview = await buildSheetPreview(reportBlob);
+  return { ...preview, name: `${file.name} - ${preview.name}` };
 }
 
 async function applySheetPreviewEdits(blob: Blob, preview: SheetPreview): Promise<Blob> {
