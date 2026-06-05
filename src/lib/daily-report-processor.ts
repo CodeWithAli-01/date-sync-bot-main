@@ -81,6 +81,7 @@ const CALL_HEADER_HINTS: Record<string, string[]> = {
   eventType: ["event type"],
   meetingType: ["meeting type"],
   shift: ["shift"],
+  team: ["team name", "team id", "team"],
 };
 
 const TEMPLATE_HEADER_HINTS: Record<string, string[]> = {
@@ -102,7 +103,7 @@ export async function processDailyReport(
   const callLog = await readCallLog(callLogFile);
   const templateWorkbook = new ExcelJS.Workbook();
   await templateWorkbook.xlsx.load(await templateFile.arrayBuffer());
-  const sheet = templateWorkbook.worksheets[0];
+  const sheet = selectDailyTemplateSheet(templateWorkbook, callLog);
   if (!sheet) throw new Error("Template workbook does not contain a sheet.");
 
   return await processDailyWorkbook(callLog, templateWorkbook, sheet, templateFile.name);
@@ -116,7 +117,8 @@ export async function processBulkDailyReports(
   const callLog = await readCallLog(callLogFile);
   const teamsWorkbook = new ExcelJS.Workbook();
   await teamsWorkbook.xlsx.load(await teamsWorkbookFile.arrayBuffer());
-  const teamSources = findDailyTeamSources(teamsWorkbook);
+  const allTeamSources = findDailyTeamSources(teamsWorkbook);
+  const teamSources = filterTeamSourcesByCallLogTeams(allTeamSources, callLog.teamNames);
 
   if (!teamSources.length) {
     throw new Error(
@@ -288,6 +290,62 @@ function findDailyTeamSources(workbook: ExcelJS.Workbook): DailyTeamSource[] {
   return sheetSources;
 }
 
+function filterTeamSourcesByCallLogTeams(
+  teamSources: DailyTeamSource[],
+  callLogTeamNames: string[],
+): DailyTeamSource[] {
+  if (!callLogTeamNames.length) return teamSources;
+
+  const callLogTeamKeys = new Set(callLogTeamNames.map(teamKey).filter(Boolean));
+  const matchingSources = teamSources.filter((source) =>
+    callLogTeamKeys.has(teamKey(source.teamName)),
+  );
+  return matchingSources.length ? matchingSources : teamSources;
+}
+
+function selectDailyTemplateSheet(
+  workbook: ExcelJS.Workbook,
+  callLog: Awaited<ReturnType<typeof readCallLog>>,
+): ExcelJS.Worksheet | undefined {
+  const templateSheets = workbook.worksheets.filter((sheet) => hasTemplateColumns(sheet));
+  if (!templateSheets.length) return workbook.worksheets[0];
+
+  const callLogTeamKeys = new Set(callLog.teamNames.map(teamKey).filter(Boolean));
+  if (callLogTeamKeys.size) {
+    const teamSheet = templateSheets.find((sheet) => callLogTeamKeys.has(teamKey(sheet.name)));
+    if (teamSheet) return teamSheet;
+  }
+
+  const callLogCodes = new Set(callLog.summaries.map((summary) => summary.code));
+  let bestSheet = templateSheets[0];
+  let bestMatches = -1;
+
+  for (const sheet of templateSheets) {
+    const matches = countTemplateEmployeeCodeMatches(sheet, callLogCodes);
+    if (matches > bestMatches) {
+      bestMatches = matches;
+      bestSheet = sheet;
+    }
+  }
+
+  return bestSheet;
+}
+
+function countTemplateEmployeeCodeMatches(
+  sheet: ExcelJS.Worksheet,
+  callLogCodes: Set<string>,
+): number {
+  const columns = findTemplateColumns(sheet, false);
+  if (!columns) return 0;
+
+  let matches = 0;
+  for (let rowNumber = columns.headerRow + 1; rowNumber <= sheet.rowCount; rowNumber++) {
+    const code = normalizeEmployeeCode(cellText(sheet.getRow(rowNumber).getCell(columns.codeCol)));
+    if (code && callLogCodes.has(code)) matches++;
+  }
+  return matches;
+}
+
 function prepareTeamWorksheet(
   workbook: ExcelJS.Workbook,
   source: DailyTeamSource,
@@ -370,6 +428,7 @@ async function readCallLog(file: File): Promise<{
   callRows: number;
   faceToFaceRows: number;
   contactPointRows: number;
+  teamNames: string[];
 }> {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(await file.arrayBuffer());
@@ -388,8 +447,10 @@ async function readCallLog(file: File): Promise<{
   const eventTypeCol = findHeader(headers, CALL_HEADER_HINTS.eventType);
   const meetingTypeCol = findHeader(headers, CALL_HEADER_HINTS.meetingType);
   const shiftCol = findHeader(headers, CALL_HEADER_HINTS.shift);
+  const teamCol = findHeader(headers, CALL_HEADER_HINTS.team, false);
 
   const byCode = new Map<string, CallSummary>();
+  const teamNames = new Map<string, string>();
   let callRows = 0;
   let faceToFaceRows = 0;
   let contactPointRows = 0;
@@ -403,10 +464,13 @@ async function readCallLog(file: File): Promise<{
     const meetingType = normalize(cellText(row.getCell(meetingTypeCol)));
     const eventType = normalize(cellText(row.getCell(eventTypeCol)));
     const shift = normalize(cellText(row.getCell(shiftCol)));
+    const teamName = teamCol ? cellText(row.getCell(teamCol)).trim() : "";
     const startTime = formatTime(
       row.getCell(startTimeCol).value,
       cellText(row.getCell(startTimeCol)),
     );
+
+    if (teamName) teamNames.set(teamKey(teamName), teamName);
 
     let summary = byCode.get(code);
     if (!summary) {
@@ -439,7 +503,13 @@ async function readCallLog(file: File): Promise<{
     summary.total = summary.morning + summary.evening;
   }
 
-  return { summaries: [...byCode.values()], callRows, faceToFaceRows, contactPointRows };
+  return {
+    summaries: [...byCode.values()],
+    callRows,
+    faceToFaceRows,
+    contactPointRows,
+    teamNames: [...teamNames.values()],
+  };
 }
 
 function findTemplateColumns(sheet: ExcelJS.Worksheet, required = true): DailyColumns | null {
@@ -555,6 +625,10 @@ function normalize(value: string): string {
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
+}
+
+function teamKey(value: string): string {
+  return normalize(value).replace(/[^a-z0-9]+/g, "");
 }
 
 function normalizeEmployeeCode(value: string): string {

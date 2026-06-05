@@ -1170,7 +1170,8 @@ function HomePage() {
                   <p className="text-sm text-muted-foreground">
                     Data is matched by Employee Code only, then Planned, Unplanned, Mor, Eve, Total,
                     and Cp are filled in the sample file. Use all teams when the workbook has a Team
-                    Name/Team ID column or one worksheet per team.
+                    Name/Team ID column or one worksheet per team; if the call log has a Team
+                    column, only matching teams are generated.
                   </p>
                 </div>
                 <div className="grid w-full gap-2 sm:w-auto sm:grid-cols-2">
