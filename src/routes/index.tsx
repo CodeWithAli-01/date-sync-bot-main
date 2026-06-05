@@ -465,6 +465,30 @@ function HomePage() {
   }, [authUser, refreshHistory]);
 
   useEffect(() => {
+    if (!authUser) return;
+
+    const channel = supabase
+      .channel(`generated-reports:${authUser.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "generated_reports",
+          filter: `user_id=eq.${authUser.id}`,
+        },
+        () => {
+          void refreshHistory();
+        },
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [authUser, refreshHistory]);
+
+  useEffect(() => {
     if (!authUser) {
       setActiveDeviceCount(null);
       return;
@@ -512,13 +536,13 @@ function HomePage() {
           size: nextReport.blob.size,
           blob: nextReport.blob,
         });
-        if (activeModule === "history") await refreshHistory();
+        await refreshHistory();
       } catch (error) {
         console.error("History save failed", error);
         toast.warning("Report ready, but history save failed.");
       }
     },
-    [activeModule, authUser, pdfFiles.length, refreshHistory],
+    [authUser, pdfFiles.length, refreshHistory],
   );
 
   const onProcess = useCallback(async () => {
@@ -721,6 +745,7 @@ function HomePage() {
           size: bulkResult.blob.size,
           blob: bulkResult.blob,
         });
+        await refreshHistory();
         toast.success(
           `Daily report ready. ${bulkResult.reportsGenerated}/${bulkResult.totalTeams} team sheet(s) updated.`,
         );
@@ -747,6 +772,7 @@ function HomePage() {
         size: result.blob.size,
         blob: result.blob,
       });
+      await refreshHistory();
       if (result.warnings.length) toast.warning(result.warnings[0]);
       toast.success(`Daily report ready. ${result.matchedEmployees} employee(s) matched.`);
     } catch (error) {
@@ -807,6 +833,7 @@ function HomePage() {
       setCoverageReport(result);
       await saveReportHistoryAndDatabase({
         id: crypto.randomUUID(),
+        userId: authUser?.id,
         fileName: result.fileName,
         createdAt: new Date().toISOString(),
         reportType: "Doctor Coverage Report",
@@ -817,6 +844,7 @@ function HomePage() {
         size: result.blob.size,
         blob: result.blob,
       });
+      await refreshHistory();
       if (result.warnings.length) toast.warning(result.warnings[0]);
       toast.success(
         `Doctor coverage report ready. ${result.matchedEmployees} employee(s) matched.`,
@@ -881,6 +909,7 @@ function HomePage() {
       setMonthlyPlannedReport(result);
       await saveReportHistoryAndDatabase({
         id: crypto.randomUUID(),
+        userId: authUser?.id,
         fileName: result.fileName,
         createdAt: new Date().toISOString(),
         reportType: "Monthly Planned Unplanned",
@@ -891,6 +920,7 @@ function HomePage() {
         size: result.blob.size,
         blob: result.blob,
       });
+      await refreshHistory();
       if (result.warnings.length) toast.warning(result.warnings[0]);
       toast.success(
         `Monthly planned/unplanned report ready. ${result.matchedEmployees} employee(s) matched.`,
@@ -2767,6 +2797,7 @@ function DashboardHome({
   );
   const totalSize = historyItems.reduce((sum, item) => sum + item.size, 0);
   const reportMix = buildReportMix(historyItems);
+  const reportFlow = buildReportFlow(historyItems);
 
   return (
     <main className="space-y-6">
@@ -2845,22 +2876,28 @@ function DashboardHome({
             <LineChart className="h-5 w-5 text-primary" />
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
-            {[
-              { label: "Daily Report", value: 72 },
-              { label: "Monthly Report", value: 88 },
-              { label: "Doctor Coverage", value: 64 },
-              { label: "Planned Summary", value: 78 },
-            ].map((item) => (
+            {reportFlow.map((item) => (
               <div key={item.label} className="neuro-inset p-4">
                 <div className="mb-3 flex items-center justify-between text-sm">
                   <span className="font-semibold text-foreground">{item.label}</span>
-                  <span className="text-muted-foreground">{item.value}%</span>
+                  <span className="text-muted-foreground">
+                    {item.hasRows ? `${item.value}%` : "-"}
+                  </span>
                 </div>
                 <div className="h-3 overflow-hidden rounded-full bg-background shadow-[var(--shadow-inset-sm)]">
                   <div
                     className="h-full rounded-full bg-primary transition-all duration-700"
                     style={{ width: `${item.value}%` }}
                   />
+                </div>
+                <div className="mt-3 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                  <span>{item.reportCount ? `${item.reportCount} saved` : "No reports"}</span>
+                  <span>{item.reviewRows ? `${item.reviewRows} review` : "Clean"}</span>
+                </div>
+                <div className="mt-1 truncate text-xs text-muted-foreground">
+                  {item.latestAt
+                    ? `Latest ${formatHistoryDate(item.latestAt)}`
+                    : "Waiting for data"}
                 </div>
               </div>
             ))}
@@ -3552,6 +3589,67 @@ function buildReportMix(items: ReportHistoryItem[]) {
     value,
     color: colors[index % colors.length],
   }));
+}
+
+const REPORT_FLOW_GROUPS = [
+  {
+    label: "Daily Report",
+    aliases: ["daily report", "daily reports"],
+  },
+  {
+    label: "Monthly Report",
+    aliases: ["monthly report"],
+  },
+  {
+    label: "Doctor Coverage",
+    aliases: ["doctor coverage", "doctor coverage report"],
+  },
+  {
+    label: "Planned Summary",
+    aliases: ["monthly planned unplanned", "monthly planned", "planned summary"],
+  },
+];
+
+function buildReportFlow(items: ReportHistoryItem[]) {
+  return REPORT_FLOW_GROUPS.map((group) => {
+    const groupItems = items.filter((item) => reportTypeMatches(item.reportType, group.aliases));
+    const totalEmployees = groupItems.reduce((sum, item) => sum + item.totalEmployees, 0);
+    const matchedEmployees = groupItems.reduce((sum, item) => sum + item.matchedEmployees, 0);
+    const reviewRows = groupItems.reduce(
+      (sum, item) => sum + Math.max(item.totalEmployees - item.matchedEmployees, 0),
+      0,
+    );
+    const latestAt = groupItems.reduce<string | null>((latest, item) => {
+      if (!latest) return item.createdAt;
+      return new Date(item.createdAt).getTime() > new Date(latest).getTime()
+        ? item.createdAt
+        : latest;
+    }, null);
+    const hasRows = totalEmployees > 0;
+
+    return {
+      label: group.label,
+      value: hasRows ? Math.round((matchedEmployees / totalEmployees) * 100) : 0,
+      reportCount: groupItems.length,
+      totalEmployees,
+      matchedEmployees,
+      reviewRows,
+      latestAt,
+      hasRows,
+    };
+  });
+}
+
+function reportTypeMatches(reportType: string | undefined, aliases: string[]) {
+  const normalized = normalizeReportType(reportType);
+  return aliases.some((alias) => normalized === normalizeReportType(alias));
+}
+
+function normalizeReportType(value: string | undefined): string {
+  return String(value ?? "Report")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
 }
 
 function AuthLoadingScreen({
