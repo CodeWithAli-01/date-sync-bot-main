@@ -140,7 +140,12 @@ export async function processBulkDailyReports(
     try {
       const sheet = teamsWorkbook.getWorksheet(source.sheetName);
       if (!sheet) throw new Error(`Team sheet not found: ${source.sheetName}`);
-      const result = processDailySheet(callLog, sheet, rowMatchesTeamSource(source));
+      const shouldProcessRow =
+        source.kind === "column"
+          ? (row: ExcelJS.Row) =>
+              teamKey(cellText(row.getCell(source.teamCol))) === teamKey(source.teamName)
+          : undefined;
+      const result = processDailySheet(callLog, sheet, shouldProcessRow);
       summary.push({
         teamName: source.teamName,
         status: "success",
@@ -351,12 +356,6 @@ function countTemplateEmployeeCodeMatches(
     if (code && callLogCodes.has(code)) matches++;
   }
   return matches;
-}
-
-function rowMatchesTeamSource(source: DailyTeamSource): (row: ExcelJS.Row) => boolean {
-  if (source.kind === "sheet") return () => true;
-  const sourceTeamKey = teamKey(source.teamName);
-  return (row) => teamKey(cellText(row.getCell(source.teamCol))) === sourceTeamKey;
 }
 
 function hasTemplateColumns(sheet: ExcelJS.Worksheet): boolean {
