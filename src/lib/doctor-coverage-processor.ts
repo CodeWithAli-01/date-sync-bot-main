@@ -34,6 +34,12 @@ interface TemplateColumns {
   coveragePercentCol: number;
 }
 
+interface TemplateIdentityColumns {
+  codeCol: number;
+  nameCol: number;
+  headerRow: number;
+}
+
 interface CoverageSourceColumns {
   headerRow: number;
   codeCol: number;
@@ -216,18 +222,82 @@ function filterCoverageRowsForSheet(
   isBulkTemplate: boolean,
 ): CoverageRow[] {
   if (!isBulkTemplate) return sourceRows;
-  const sheetKey = normalizeTeamName(sheet.name);
-  if (!sheetKey) return sourceRows;
+  const templateKeys = collectTemplateEmployeeKeys(sheet);
+  if (!templateKeys.totalEmployees) return [];
 
-  const teamRows = sourceRows.filter((row) =>
-    [row.teamName, row.sourceName].some((value) => teamNamesMatch(value, sheet.name)),
-  );
+  const groups = groupCoverageRows(sourceRows);
+  const scored = [...groups.values()]
+    .map((group) => ({
+      ...group,
+      score: scoreCoverageRows(group.rows, templateKeys),
+      direct: teamNamesMatch(group.label, sheet.name),
+    }))
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return Number(b.direct) - Number(a.direct);
+    });
 
-  return teamRows.length ? teamRows : sourceRows;
+  const best = scored[0];
+  const minimumReliableScore = Math.min(2, templateKeys.totalEmployees);
+  if (best && best.score >= minimumReliableScore) return best.rows;
+
+  const direct = scored.find((group) => group.direct && group.score > 0);
+  if (direct && direct.score >= minimumReliableScore) return direct.rows;
+
+  return [];
 }
 
 function coverageKey(row: CoverageRow): string {
   return `${row.sourceName}|${row.teamName}|${row.code}|${personNameKey(row.name)}`;
+}
+
+function groupCoverageRows(sourceRows: CoverageRow[]) {
+  const groups = new Map<string, { label: string; rows: CoverageRow[] }>();
+  for (const row of sourceRows) {
+    const label = row.teamName.trim() || row.sourceName.trim() || "coverage";
+    const key = normalizeTeamName(label) || label;
+    const group = groups.get(key) ?? { label, rows: [] };
+    group.rows.push(row);
+    groups.set(key, group);
+  }
+  return groups;
+}
+
+function collectTemplateEmployeeKeys(sheet: ExcelJS.Worksheet) {
+  const columns = findTemplateIdentityColumns(sheet);
+  const codes = new Set<string>();
+  const names = new Set<string>();
+  let totalEmployees = 0;
+
+  if (!columns) return { codes, names, totalEmployees };
+
+  for (let rowNumber = columns.headerRow + 1; rowNumber <= sheet.rowCount; rowNumber++) {
+    const row = sheet.getRow(rowNumber);
+    const code = normalizeEmployeeCode(cellText(row.getCell(columns.codeCol)));
+    const nameKey = personNameKey(cellText(row.getCell(columns.nameCol)));
+    if (!code && !nameKey) continue;
+    totalEmployees++;
+    if (code) codes.add(code);
+    if (nameKey) names.add(nameKey);
+  }
+
+  return { codes, names, totalEmployees };
+}
+
+function scoreCoverageRows(
+  rows: CoverageRow[],
+  templateKeys: { codes: Set<string>; names: Set<string> },
+) {
+  let score = 0;
+  for (const row of rows) {
+    if (
+      (row.code && templateKeys.codes.has(row.code)) ||
+      templateKeys.names.has(personNameKey(row.name))
+    ) {
+      score++;
+    }
+  }
+  return score;
 }
 
 function rowText(row: ExcelJS.Row, columnNumber: number): string {
@@ -261,15 +331,19 @@ function findCoverageSourceColumns(sheet: ExcelJS.Worksheet): CoverageSourceColu
 }
 
 function findTemplateColumns(sheet: ExcelJS.Worksheet): boolean {
+  return Boolean(findTemplateIdentityColumns(sheet));
+}
+
+function findTemplateIdentityColumns(sheet: ExcelJS.Worksheet): TemplateIdentityColumns | null {
   for (let rowNumber = 1; rowNumber <= Math.min(sheet.rowCount, 12); rowNumber++) {
     const row = sheet.getRow(rowNumber);
     const labels = headerLabels(row, sheet.columnCount);
     const codeCol = findHeader(labels, TEMPLATE_HINTS.code, false);
     const nameCol = findHeader(labels, TEMPLATE_HINTS.name, false);
-    if (codeCol && nameCol) return true;
+    if (codeCol && nameCol) return { codeCol, nameCol, headerRow: rowNumber };
   }
 
-  return false;
+  return null;
 }
 
 function ensureTemplateColumns(sheet: ExcelJS.Worksheet): TemplateColumns {
