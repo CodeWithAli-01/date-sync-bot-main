@@ -353,81 +353,14 @@ function countTemplateEmployeeCodeMatches(
   return matches;
 }
 
-function prepareTeamWorksheet(
-  workbook: ExcelJS.Workbook,
-  source: DailyTeamSource,
-): ExcelJS.Worksheet {
-  const sheet = workbook.getWorksheet(source.sheetName);
-  if (!sheet) throw new Error(`Team sheet not found: ${source.sheetName}`);
-
-  for (const otherSheet of [...workbook.worksheets]) {
-    if (otherSheet.id !== sheet.id) workbook.removeWorksheet(otherSheet.id);
-  }
-
-  sheet.name = safeSheetName(source.teamName);
-  if (source.kind === "column") filterWorksheetToTeam(sheet, source);
-  return sheet;
-}
-
-function filterWorksheetToTeam(
-  sheet: ExcelJS.Worksheet,
-  source: Extract<DailyTeamSource, { kind: "column" }>,
-) {
-  for (let rowNumber = sheet.rowCount; rowNumber > source.headerRow; rowNumber--) {
-    const row = sheet.getRow(rowNumber);
-    const teamName = cellText(row.getCell(source.teamCol)).trim();
-    if (normalize(teamName) !== normalize(source.teamName)) {
-      sheet.spliceRows(rowNumber, 1);
-    }
-  }
+function rowMatchesTeamSource(source: DailyTeamSource): (row: ExcelJS.Row) => boolean {
+  if (source.kind === "sheet") return () => true;
+  const sourceTeamKey = teamKey(source.teamName);
+  return (row) => teamKey(cellText(row.getCell(source.teamCol))) === sourceTeamKey;
 }
 
 function hasTemplateColumns(sheet: ExcelJS.Worksheet): boolean {
   return Boolean(findTemplateColumns(sheet, false));
-}
-
-function buildBulkSummaryWorkbook(summary: BulkDailyReportSummaryItem[]): ExcelJS.Workbook {
-  const workbook = new ExcelJS.Workbook();
-  const sheet = workbook.addWorksheet("Summary");
-  const successful = summary.filter((item) => item.status === "success").length;
-  const failed = summary.length - successful;
-
-  sheet.addRow(["Total teams processed", summary.length]);
-  sheet.addRow(["Total reports generated", successful]);
-  sheet.addRow(["Failed reports", failed]);
-  sheet.addRow([]);
-  sheet.addRow([
-    "Team",
-    "Status",
-    "File Name",
-    "Total Employees",
-    "Matched Employees",
-    "Error Reason",
-  ]);
-
-  for (const item of summary) {
-    sheet.addRow([
-      item.teamName,
-      item.status,
-      item.fileName,
-      item.totalEmployees,
-      item.matchedEmployees,
-      item.error ?? "",
-    ]);
-  }
-
-  sheet.getColumn(1).width = 26;
-  sheet.getColumn(2).width = 14;
-  sheet.getColumn(3).width = 34;
-  sheet.getColumn(4).width = 18;
-  sheet.getColumn(5).width = 18;
-  sheet.getColumn(6).width = 50;
-
-  for (const rowNumber of [1, 2, 3, 5]) {
-    sheet.getRow(rowNumber).font = { bold: true };
-  }
-
-  return workbook;
 }
 
 async function readCallLog(file: File): Promise<{
@@ -719,35 +652,4 @@ function safeFileName(value: string): string {
       .replace(/_+/g, "_")
       .slice(0, 90) || "Team"
   );
-}
-
-function safeSheetName(value: string): string {
-  return (
-    value
-      .trim()
-      .replace(/[\\/?*[\]:]+/g, " ")
-      .replace(/\s+/g, " ")
-      .slice(0, 31) || "Team"
-  );
-}
-
-function uniqueFileName(fileName: string, usedFileNames: Set<string>): string {
-  if (!usedFileNames.has(fileName)) {
-    usedFileNames.add(fileName);
-    return fileName;
-  }
-
-  const extensionMatch = fileName.match(/(\.[^.]+)$/);
-  const extension = extensionMatch?.[1] ?? "";
-  const baseName = extension ? fileName.slice(0, -extension.length) : fileName;
-  let counter = 2;
-  let candidate = `${baseName}_${counter}${extension}`;
-
-  while (usedFileNames.has(candidate)) {
-    counter++;
-    candidate = `${baseName}_${counter}${extension}`;
-  }
-
-  usedFileNames.add(candidate);
-  return candidate;
 }

@@ -664,7 +664,7 @@ function HomePage() {
           blob: bulkResult.blob,
         });
         toast.success(
-          `Daily reports ready. ${bulkResult.reportsGenerated}/${bulkResult.totalTeams} team report(s) generated.`,
+          `Daily report ready. ${bulkResult.reportsGenerated}/${bulkResult.totalTeams} team sheet(s) updated.`,
         );
         return;
       }
@@ -701,7 +701,7 @@ function HomePage() {
     try {
       const preview = dailyReport
         ? await buildSheetPreview(dailyReport.blob, dailyReport.sheetName)
-        : await buildZipSheetPreview(bulkDailyReport!.blob, "Bulk_Daily_Report_Summary.xlsx");
+        : await buildSheetPreview(bulkDailyReport!.blob);
       setDailyPreview(preview);
       requestAnimationFrame(() => {
         dailyPreviewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1208,7 +1208,7 @@ function HomePage() {
                       <p className="text-sm text-muted-foreground">
                         {dailyReport
                           ? `${dailyReport.matchedEmployees}/${dailyReport.totalEmployees} employee(s) matched from the sample file.`
-                          : `${bulkDailyReport!.reportsGenerated}/${bulkDailyReport!.totalTeams} team report(s) generated. Multiple reports are packaged as one ZIP download.`}
+                          : `${bulkDailyReport!.reportsGenerated}/${bulkDailyReport!.totalTeams} team sheet(s) updated in one Excel workbook.`}
                       </p>
                     </div>
                   </div>
@@ -1263,7 +1263,7 @@ function HomePage() {
                   <>
                     <div className="mt-6 grid gap-4 md:grid-cols-3">
                       <Stat label="Teams processed" value={bulkDailyReport!.totalTeams} />
-                      <Stat label="Reports generated" value={bulkDailyReport!.reportsGenerated} />
+                      <Stat label="Sheets updated" value={bulkDailyReport!.reportsGenerated} />
                       <Stat
                         label="Failed reports"
                         value={bulkDailyReport!.failedReports}
@@ -1291,7 +1291,7 @@ function HomePage() {
                             {item.matchedEmployees}/{item.totalEmployees}
                           </div>
                           <div className="min-w-0 truncate text-muted-foreground">
-                            {item.error ?? item.fileName}
+                            {item.error ?? "Updated in workbook"}
                           </div>
                         </div>
                       ))}
@@ -3441,22 +3441,6 @@ async function buildSheetPreview(blob: Blob, preferredSheetName?: string): Promi
   }
 
   return { name: ws.name || "Sheet preview", sheetName: ws.name, rows };
-}
-
-async function buildZipSheetPreview(blob: Blob, preferredFileName?: string): Promise<SheetPreview> {
-  const JSZip = (await import("jszip")).default;
-  const zip = await JSZip.loadAsync(await blob.arrayBuffer());
-  const file =
-    (preferredFileName ? zip.file(preferredFileName) : null) ||
-    Object.values(zip.files).find((entry) => !entry.dir && /\.xlsx$/i.test(entry.name));
-
-  if (!file) throw new Error("No Excel report found in the ZIP file.");
-
-  const reportBlob = new Blob([await file.async("arraybuffer")], {
-    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  });
-  const preview = await buildSheetPreview(reportBlob);
-  return { ...preview, name: `${file.name} - ${preview.name}` };
 }
 
 async function applySheetPreviewEdits(blob: Blob, preview: SheetPreview): Promise<Blob> {
