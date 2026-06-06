@@ -359,14 +359,13 @@ function processDailySheet(
     row.getCell(outputColumns.eveningCol).value = match.evening || 0;
     row.getCell(outputColumns.totalCol).value = match.total || 0;
     row.getCell(outputColumns.cpCol).value = match.cpTime || null;
+    styleDailyCells(row, outputColumns);
     if (outputColumns.selfieCol) {
       const selfieCell = row.getCell(outputColumns.selfieCol);
       const selfieCount = match.selfies || 0;
       selfieCell.value = formatSelfieText(selfieCount);
       styleSelfieCell(selfieCell, selfieCount);
     }
-
-    styleDailyCells(row, outputColumns);
     if (match.total > 0) preview.push({ name: name || match.name, total: match.total });
     performanceRows.push({
       teamName: rowTeamName || match.teamName || sheet.name,
@@ -388,6 +387,8 @@ function processDailySheet(
         isTimeOnOrBefore(match.cpTime, 10 * 60),
     });
   }
+
+  applySelfieColumnStyles(sheet, outputColumns);
 
   return {
     totalEmployees,
@@ -1030,8 +1031,7 @@ function clearDailyCells(row: ExcelJS.Row, columns: DailyColumns) {
     const cell = row.getCell(col);
     cell.value = null;
     if (col === columns.selfieCol) {
-      cell.fill = undefined as unknown as ExcelJS.Fill;
-      cell.border = { ...(cell.border ?? {}), ...SELFIE_BORDER };
+      applyIsolatedSelfieStyle(cell, undefined);
     }
   }
 }
@@ -1051,25 +1051,79 @@ function styleDailyCells(row: ExcelJS.Row, columns: DailyColumns) {
   }
 }
 
+function applySelfieColumnStyles(sheet: ExcelJS.Worksheet, columns: DailyColumns) {
+  if (!columns.selfieCol) return;
+
+  const headerCell = sheet.getRow(columns.headerRow).getCell(columns.selfieCol);
+  headerCell.border = { ...(headerCell.border ?? {}), ...SELFIE_BORDER };
+  sheet.getColumn(columns.selfieCol).width = Math.max(
+    sheet.getColumn(columns.selfieCol).width ?? 0,
+    24,
+  );
+
+  for (let rowNumber = columns.headerRow + 1; rowNumber <= sheet.rowCount; rowNumber++) {
+    const row = sheet.getRow(rowNumber);
+    row.eachCell((cell, colNumber) => {
+      if (colNumber !== columns.selfieCol) clearKnownSelfieFill(cell);
+    });
+    const cell = row.getCell(columns.selfieCol);
+    const text = cellText(cell);
+    if (!text.trim()) continue;
+    const count = parseSelfieCountFromCell(text);
+    styleSelfieCell(cell, count);
+  }
+}
+
 function formatSelfieText(count: number): string {
   if (count <= 0) return "0 selfies 0 locations";
   if (count === 1) return "1 selfie with location";
   return `${count} selfies with locations`;
 }
 
+function parseSelfieCountFromCell(value: string): number {
+  const match = value.match(/\b(\d+)\s*selfies?\b/i);
+  return match ? Number(match[1]) : 0;
+}
+
 function styleSelfieCell(cell: ExcelJS.Cell, count: number) {
-  cell.alignment = { ...(cell.alignment ?? {}), horizontal: "center", vertical: "middle" };
-  cell.border = { ...(cell.border ?? {}), ...SELFIE_BORDER };
   if (count <= 0) {
-    cell.fill = SELFIE_ZERO_FILL;
+    applyIsolatedSelfieStyle(cell, SELFIE_ZERO_FILL);
     return;
   }
   if (count <= 11) {
-    cell.fill = SELFIE_WARNING_FILL;
+    applyIsolatedSelfieStyle(cell, SELFIE_WARNING_FILL);
     return;
   }
 
-  cell.fill = undefined as unknown as ExcelJS.Fill;
+  applyIsolatedSelfieStyle(cell, undefined);
+}
+
+function applyIsolatedSelfieStyle(cell: ExcelJS.Cell, fill: ExcelJS.Fill | undefined) {
+  const {
+    fill: _sharedFill,
+    border: sharedBorder,
+    alignment: sharedAlignment,
+    ...rest
+  } = cell.style;
+  cell.style = {
+    ...rest,
+    alignment: { ...(sharedAlignment ?? {}), horizontal: "center", vertical: "middle" },
+    border: { ...(sharedBorder ?? {}), ...SELFIE_BORDER },
+    ...(fill ? { fill: cloneFill(fill) } : {}),
+  };
+}
+
+function cloneFill(fill: ExcelJS.Fill): ExcelJS.Fill {
+  return JSON.parse(JSON.stringify(fill)) as ExcelJS.Fill;
+}
+
+function clearKnownSelfieFill(cell: ExcelJS.Cell) {
+  const argb =
+    cell.fill && "fgColor" in cell.fill ? cell.fill.fgColor?.argb?.toUpperCase() : undefined;
+  if (argb !== SELFIE_WARNING_FILL.fgColor.argb && argb !== SELFIE_ZERO_FILL.fgColor.argb) return;
+
+  const { fill: _sharedFill, ...rest } = cell.style;
+  cell.style = { ...rest };
 }
 
 function cellText(cell: ExcelJS.Cell): string {
