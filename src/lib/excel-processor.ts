@@ -26,6 +26,23 @@ export interface ProcessReport {
   fileName: string;
   sheetName: string;
   preview: { name: string; total: number }[];
+  performanceRows: MonthlyReportPerformanceRow[];
+}
+
+export interface MonthlyReportPerformanceRow {
+  teamName: string;
+  employeeCode: string;
+  name: string;
+  designation: string;
+  planned: number;
+  unplanned: number;
+  totalCalls: number;
+  totalSelfies: number;
+  callsPerDay: number;
+  selfiesPerDay: number;
+  plannedPercent: number;
+  cpTime: string;
+  topQualified: boolean;
 }
 
 const NAME_HINTS = ["employee name", "employee", "name", "emp name", "staff name", "member name"];
@@ -177,6 +194,7 @@ interface Emp {
   row: number;
   name: string;
   code: string | null;
+  designation: string;
   nameKey: string;
   cleanNameKey: string;
 }
@@ -462,10 +480,12 @@ function readEmployees(ws: ExcelJS.Worksheet, det: DetectedSheet): Emp[] {
       continue;
     }
     const codeVal = det.codeCol ? normalizeEmployeeCode(cellText(row.getCell(det.codeCol))) : null;
+    const designation = det.designationCol ? cellText(row.getCell(det.designationCol)).trim() : "";
     employees.push({
       row: r,
       name: nameVal,
       code: codeVal,
+      designation,
       nameKey: normalize(nameVal),
       cleanNameKey: personNameKey(nameVal),
     });
@@ -954,6 +974,7 @@ function fillMonthlyReportSheet(
     }
     return { ...employee, idx, total };
   });
+  const performanceRows = buildMonthlyReportPerformanceRows(ws.name, empTotals, matchByEmp, dates);
 
   for (const emp of empTotals) {
     const row = ws.getRow(emp.row);
@@ -1047,7 +1068,63 @@ function fillMonthlyReportSheet(
     preview: empTotals
       .slice(0, 10)
       .map((s) => ({ name: `${ws.name} - ${s.name}`, total: s.total })),
+    performanceRows,
   };
+}
+
+function buildMonthlyReportPerformanceRows(
+  teamName: string,
+  empTotals: Array<Emp & { idx: number; total: number }>,
+  matchByEmp: Map<number, Map<string, MatchValue>>,
+  dates: string[],
+): MonthlyReportPerformanceRow[] {
+  const dayCount = Math.max(dates.length, 1);
+
+  return empTotals
+    .map((employee) => {
+      const matches = matchByEmp.get(employee.idx);
+      let planned = 0;
+      let unplanned = 0;
+      let totalCalls = 0;
+      let totalSelfies = 0;
+
+      for (const date of dates) {
+        const match = matches?.get(date);
+        if (!match) continue;
+        planned += match.planned;
+        unplanned += match.unplanned;
+        totalCalls += match.total;
+        totalSelfies += match.selfies;
+      }
+
+      const callsPerDay = Math.round(totalCalls / dayCount);
+      const selfiesPerDay = Math.round(totalSelfies / dayCount);
+      const plannedPercent = percent(planned, totalCalls);
+
+      return {
+        teamName,
+        employeeCode: employee.code ?? "",
+        name: employee.name,
+        designation: employee.designation,
+        planned,
+        unplanned,
+        totalCalls,
+        totalSelfies,
+        callsPerDay,
+        selfiesPerDay,
+        plannedPercent,
+        cpTime: "",
+        topQualified:
+          callsPerDay >= 10 && selfiesPerDay >= 10 && plannedPercent >= 70 && totalCalls > 0,
+      };
+    })
+    .filter(
+      (row) => row.totalCalls > 0 || row.totalSelfies > 0 || row.planned > 0 || row.unplanned > 0,
+    );
+}
+
+function percent(part: number, total: number): number {
+  return total > 0 ? Math.round((part / total) * 100) : 0;
 }
 
 async function processExcelMultiSheet(
@@ -1075,6 +1152,7 @@ async function processExcelMultiSheet(
   const warnings: string[] = [];
   const unmatchedNames = new Set<string>();
   const preview: { name: string; total: number }[] = [];
+  const performanceRows: MonthlyReportPerformanceRow[] = [];
   let totalEmployees = 0;
   let matchedEmployees = 0;
   let totalMatchedRows = 0;
@@ -1097,6 +1175,7 @@ async function processExcelMultiSheet(
     result.unmatchedNames.forEach((name) => unmatchedNames.add(name));
     warnings.push(...result.warnings);
     preview.push(...result.preview);
+    performanceRows.push(...result.performanceRows);
   }
 
   addPdfAuditSheet(wb, options.pdfResults, (row) => {
@@ -1131,6 +1210,7 @@ async function processExcelMultiSheet(
     fileName: excelFile.name,
     sheetName: states[0].det.ws.name,
     preview: preview.sort((a, b) => b.total - a.total).slice(0, 10),
+    performanceRows,
   };
 }
 
@@ -1412,6 +1492,7 @@ export async function processExcel(
     fileName: excelFile.name,
     sheetName: ws.name,
     preview: empTotals.slice(0, 10).map((s) => ({ name: s.name, total: s.total })),
+    performanceRows,
   };
 }
 

@@ -17,6 +17,21 @@ export interface DailyReportResult {
   fileName: string;
   sheetName: string;
   preview: { name: string; total: number }[];
+  performanceRows: DailyPerformanceRow[];
+}
+
+export interface DailyPerformanceRow {
+  teamName: string;
+  employeeCode: string;
+  name: string;
+  designation: string;
+  planned: number;
+  unplanned: number;
+  totalCalls: number;
+  selfies: number;
+  cpTime: string;
+  plannedPercent: number;
+  topQualified: boolean;
 }
 
 export interface BulkDailyReportSummaryItem {
@@ -34,6 +49,7 @@ export interface BulkDailyReportResult {
   blob: Blob;
   fileName: string;
   summary: BulkDailyReportSummaryItem[];
+  performanceRows: DailyPerformanceRow[];
 }
 
 interface CallSummary {
@@ -61,6 +77,7 @@ interface DailyColumns {
   cpCol: number;
   selfieCol?: number;
   teamCol?: number;
+  designationCol?: number;
 }
 
 const SELFIE_WARNING_FILL: ExcelJS.Fill = {
@@ -101,6 +118,7 @@ interface DailySheetProcessResult {
   matchedEmployees: number;
   unmatchedEmployees: string[];
   preview: { name: string; total: number }[];
+  performanceRows: DailyPerformanceRow[];
 }
 
 interface SelfieEmployeeSummary {
@@ -139,6 +157,7 @@ const TEMPLATE_HEADER_HINTS: Record<string, string[]> = {
   total: ["total"],
   cp: ["cp"],
   selfies: ["selfies", "selfie", "images", "image"],
+  designation: ["designation", "desig", "position", "title"],
 };
 
 const SELFIE_HEADER_HINTS: Record<string, string[]> = {
@@ -190,6 +209,7 @@ export async function processBulkDailyReports(
   }
 
   const summary: BulkDailyReportSummaryItem[] = [];
+  const performanceRows: DailyPerformanceRow[] = [];
 
   for (let index = 0; index < teamSources.length; index++) {
     const source = teamSources[index];
@@ -208,6 +228,9 @@ export async function processBulkDailyReports(
               teamKey(cellText(row.getCell(source.teamCol))) === teamKey(source.teamName)
           : undefined;
       const result = processDailySheet(callLog, sheet, shouldProcessRow);
+      performanceRows.push(
+        ...result.performanceRows.map((row) => ({ ...row, teamName: source.teamName })),
+      );
       summary.push({
         teamName: source.teamName,
         status: "success",
@@ -238,6 +261,7 @@ export async function processBulkDailyReports(
     blob,
     fileName: teamsWorkbookFile.name.replace(/\.xlsx$/i, "") + " - Daily Report.xlsx",
     summary,
+    performanceRows,
   };
 }
 
@@ -276,6 +300,10 @@ async function processDailyWorkbook(
       : templateFileName.replace(/\.xlsx$/i, "") + " - Daily Report.xlsx",
     sheetName: sheet.name,
     preview: result.preview,
+    performanceRows: result.performanceRows.map((row) => ({
+      ...row,
+      teamName: teamName || row.teamName || sheet.name,
+    })),
   };
 }
 
@@ -292,6 +320,7 @@ function processDailySheet(
   const summariesByCode = new Map(callLog.summaries.map((item) => [item.code, item]));
   const unmatched = new Set(callLog.summaries.map((item) => `${item.code} ${item.name}`));
   const preview: { name: string; total: number }[] = [];
+  const performanceRows: DailyPerformanceRow[] = [];
   let matchedEmployees = 0;
   let totalEmployees = 0;
 
@@ -327,6 +356,25 @@ function processDailySheet(
 
     styleDailyCells(row, outputColumns);
     if (match.total > 0) preview.push({ name: name || match.name, total: match.total });
+    performanceRows.push({
+      teamName: outputColumns.teamCol ? cellText(row.getCell(outputColumns.teamCol)) : sheet.name,
+      employeeCode: code,
+      name: name || match.name,
+      designation: outputColumns.designationCol
+        ? cellText(row.getCell(outputColumns.designationCol))
+        : "",
+      planned: match.planned,
+      unplanned: match.unplanned,
+      totalCalls: match.total,
+      selfies: match.selfies,
+      cpTime: match.cpTime,
+      plannedPercent: percent(match.planned, match.total),
+      topQualified:
+        match.total >= 10 &&
+        match.selfies >= 10 &&
+        percent(match.planned, match.total) >= 65 &&
+        isTimeOnOrBefore(match.cpTime, 10 * 60),
+    });
   }
 
   return {
@@ -334,6 +382,7 @@ function processDailySheet(
     matchedEmployees,
     unmatchedEmployees: [...unmatched],
     preview: preview.sort((a, b) => b.total - a.total).slice(0, 10),
+    performanceRows,
   };
 }
 
@@ -733,6 +782,29 @@ function isImageMessage(body: string, type: string): boolean {
   return normalizedBody.includes("image") || normalizedType === "image";
 }
 
+function percent(part: number, total: number): number {
+  return total > 0 ? Math.round((part / total) * 100) : 0;
+}
+
+function isTimeOnOrBefore(value: string, maxMinutes: number): boolean {
+  const minutes = parseTimeToMinutes(value);
+  return minutes !== null && minutes <= maxMinutes;
+}
+
+function parseTimeToMinutes(value: string): number | null {
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  const match = text.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i);
+  if (!match) return null;
+  let hours = Number(match[1]);
+  const minutes = Number(match[2] ?? 0);
+  const meridiem = match[3]?.toLowerCase();
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+  if (meridiem === "pm" && hours < 12) hours += 12;
+  if (meridiem === "am" && hours === 12) hours = 0;
+  return hours * 60 + minutes;
+}
+
 function findTemplateColumns(sheet: ExcelJS.Worksheet, required = true): DailyColumns | null {
   for (let rowNumber = 1; rowNumber <= Math.min(sheet.rowCount, 12); rowNumber++) {
     const row = sheet.getRow(rowNumber);
@@ -751,6 +823,7 @@ function findTemplateColumns(sheet: ExcelJS.Worksheet, required = true): DailyCo
     const totalCol = findHeader(labels, TEMPLATE_HEADER_HINTS.total, false);
     const cpCol = findHeader(labels, TEMPLATE_HEADER_HINTS.cp, false);
     const selfieCol = findHeader(labels, TEMPLATE_HEADER_HINTS.selfies, false);
+    const designationCol = findHeader(labels, TEMPLATE_HEADER_HINTS.designation, false);
 
     if (
       codeCol &&
@@ -774,6 +847,7 @@ function findTemplateColumns(sheet: ExcelJS.Worksheet, required = true): DailyCo
         cpCol,
         selfieCol: selfieCol || undefined,
         teamCol: teamCol || undefined,
+        designationCol: designationCol || undefined,
       };
     }
   }

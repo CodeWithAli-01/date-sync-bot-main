@@ -15,6 +15,20 @@ export interface MonthlyPlannedResult {
   fileName: string;
   sheetName: string;
   preview: { name: string; total: number }[];
+  performanceRows: MonthlyPlannedPerformanceRow[];
+}
+
+export interface MonthlyPlannedPerformanceRow {
+  teamName: string;
+  employeeCode: string;
+  name: string;
+  designation: string;
+  planned: number;
+  unplanned: number;
+  totalCalls: number;
+  plannedPercent: number;
+  cpAvgTime: string;
+  topQualified: boolean;
 }
 
 interface MonthlySummary {
@@ -32,6 +46,7 @@ interface MonthlySummary {
 interface MonthlyColumns {
   codeCol: number;
   nameCol: number;
+  designationCol?: number;
   plannedCol: number;
   plannedAvgCol: number;
   unplannedCol: number;
@@ -54,6 +69,7 @@ const CALL_HEADER_HINTS: Record<string, string[]> = {
 const TEMPLATE_HEADER_HINTS: Record<string, string[]> = {
   code: ["employee code", "emp code", "employee id", "code"],
   name: ["name", "employee name"],
+  designation: ["designation", "desig", "position", "title"],
 };
 
 export async function processMonthlyPlannedReport(
@@ -70,6 +86,7 @@ export async function processMonthlyPlannedReport(
 
   const unmatched = new Set(callLog.summaries.map(monthlySummaryKey));
   const preview: { name: string; total: number }[] = [];
+  const performanceRows: MonthlyPlannedPerformanceRow[] = [];
   let matchedEmployees = 0;
   let templateRows = 0;
   let firstSheetName = sheets[0].name;
@@ -84,6 +101,7 @@ export async function processMonthlyPlannedReport(
       unmatched.delete(key);
     });
     preview.push(...result.preview);
+    performanceRows.push(...result.performanceRows);
   }
 
   const buffer = await workbook.xlsx.writeBuffer();
@@ -108,6 +126,7 @@ export async function processMonthlyPlannedReport(
     fileName: templateFile.name.replace(/\.xlsx$/i, "") + " - Monthly Planned Unplanned.xlsx",
     sheetName: firstSheetName,
     preview: preview.sort((a, b) => b.total - a.total).slice(0, 10),
+    performanceRows,
   };
 }
 
@@ -116,6 +135,7 @@ function fillMonthlyPlannedSheet(sheet: ExcelJS.Worksheet, summaries: MonthlySum
   const columns = ensureMonthlyColumns(sheet);
   const matchedKeys = new Set<string>();
   const preview: { name: string; total: number }[] = [];
+  const performanceRows: MonthlyPlannedPerformanceRow[] = [];
   let matchedEmployees = 0;
   let templateRows = 0;
 
@@ -146,9 +166,21 @@ function fillMonthlyPlannedSheet(sheet: ExcelJS.Worksheet, summaries: MonthlySum
     styleMonthlyCells(row, columns);
 
     if (match.totalCalls > 0) preview.push({ name: name || match.name, total: match.totalCalls });
+    performanceRows.push({
+      teamName: match.teamName || sheet.name,
+      employeeCode: code,
+      name: name || match.name,
+      designation: columns.designationCol ? cellText(row.getCell(columns.designationCol)) : "",
+      planned: match.planned,
+      unplanned: match.unplanned,
+      totalCalls: match.totalCalls,
+      plannedPercent: percent(match.planned, match.totalCalls),
+      cpAvgTime: averageTime(match.cpTimes),
+      topQualified: percent(match.planned, match.totalCalls) >= 70,
+    });
   }
 
-  return { matchedEmployees, templateRows, matchedKeys, preview };
+  return { matchedEmployees, templateRows, matchedKeys, preview, performanceRows };
 }
 
 async function readMonthlyCallLog(input: File | File[]): Promise<{
@@ -303,6 +335,7 @@ function ensureMonthlyColumns(sheet: ExcelJS.Worksheet): MonthlyColumns {
 
     const codeCol = findHeader(labels, TEMPLATE_HEADER_HINTS.code, false);
     const nameCol = findHeader(labels, TEMPLATE_HEADER_HINTS.name, false);
+    const designationCol = findHeader(labels, TEMPLATE_HEADER_HINTS.designation, false);
     if (!codeCol || !nameCol) continue;
 
     const lastUsedCol = Math.max(findLastUsedColumn(sheet), nameCol);
@@ -319,6 +352,7 @@ function ensureMonthlyColumns(sheet: ExcelJS.Worksheet): MonthlyColumns {
     const result: MonthlyColumns = {
       codeCol,
       nameCol,
+      designationCol: designationCol || undefined,
       plannedCol: 0,
       plannedAvgCol: 0,
       unplannedCol: 0,
@@ -419,6 +453,10 @@ function findHeader(headers: Map<string, number>, hints: string[], required = tr
 
 function average(total: number, days: number): number {
   return days > 0 ? Math.round(total / days) : 0;
+}
+
+function percent(part: number, total: number): number {
+  return total > 0 ? Math.round((part / total) * 100) : 0;
 }
 
 function averageTime(minutes: number[]): string {

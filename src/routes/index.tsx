@@ -118,6 +118,25 @@ interface StoredReportHistoryItem extends ReportHistoryItem {
   blob: Blob;
 }
 
+interface PerformanceReport {
+  title: string;
+  description: string;
+  fileName: string;
+  topRows: PerformanceRow[];
+  lowRows: PerformanceRow[];
+  summaryRows: Record<string, string | number>[];
+}
+
+interface PerformanceRow {
+  teamName?: string;
+  employeeCode?: string;
+  name: string;
+  designation?: string;
+  value: number | string;
+  note?: string;
+  details?: Record<string, string | number>;
+}
+
 const APP_NAME = "Reporting Management";
 
 const DASHBOARD_LINES = [
@@ -205,6 +224,8 @@ function HomePage() {
   );
   const [monthlyPlannedPreview, setMonthlyPlannedPreview] = useState<SheetPreview | null>(null);
   const [monthlyPlannedPreviewLoading, setMonthlyPlannedPreviewLoading] = useState(false);
+  const [performanceDialogOpen, setPerformanceDialogOpen] = useState(false);
+  const [performanceDialogMode, setPerformanceDialogMode] = useState<"options" | "view">("options");
 
   const excelInputRef = useRef<HTMLInputElement>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
@@ -426,6 +447,49 @@ function HomePage() {
         (report.debug.totalMatched / Math.max(report.debug.totalEmployeesDetected, 1)) * 100,
       )
     : null;
+  const performanceReport = useMemo(
+    () =>
+      buildPerformanceReport({
+        activeModule,
+        report,
+        dailyReport,
+        bulkDailyReport,
+        coverageReport,
+        monthlyPlannedReport,
+      }),
+    [activeModule, bulkDailyReport, coverageReport, dailyReport, monthlyPlannedReport, report],
+  );
+
+  const openPerformanceActions = useCallback(() => {
+    if (!performanceReport) {
+      toast.info("Generate this report first, then performance details will be available.");
+      return;
+    }
+    setPerformanceDialogMode("options");
+    setPerformanceDialogOpen(true);
+  }, [performanceReport]);
+
+  const downloadPerformanceReport = useCallback(async () => {
+    if (!performanceReport) {
+      toast.info("Generate this report first, then performance details will be available.");
+      return;
+    }
+
+    try {
+      const blob = await buildPerformanceWorkbook(performanceReport);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = performanceReport.fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("Performance download failed", error);
+      toast.error("Unable to download performance Excel file.");
+    }
+  }, [performanceReport]);
 
   const refreshHistory = useCallback(
     async (force = false) => {
@@ -1081,6 +1145,23 @@ function HomePage() {
     setPreviewDirty(true);
   };
 
+  const performanceActions = (
+    <PerformanceHeaderActions
+      available={Boolean(performanceReport)}
+      onOpen={openPerformanceActions}
+    />
+  );
+  const performanceDialog = (
+    <PerformanceActionsDialog
+      open={performanceDialogOpen}
+      mode={performanceDialogMode}
+      performanceReport={performanceReport}
+      onOpenChange={setPerformanceDialogOpen}
+      onModeChange={setPerformanceDialogMode}
+      onDownload={downloadPerformanceReport}
+    />
+  );
+
   if (authLoading) {
     return (
       <AuthLoadingScreen
@@ -1164,7 +1245,9 @@ function HomePage() {
           label="Report tool"
           title="Daily Report"
           description="Upload one sample workbook and one or more call log Excel files. No PDF upload is required."
+          actions={performanceActions}
         />
+        {performanceDialog}
 
         <main className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_260px] 2xl:grid-cols-[minmax(0,1fr)_280px]">
           <div className="space-y-6">
@@ -1554,7 +1637,9 @@ function HomePage() {
           label="Report tool"
           title="Doctor Coverage"
           description="Add coverage columns to a sample employee file."
+          actions={performanceActions}
         />
+        {performanceDialog}
 
         <main className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_260px] 2xl:grid-cols-[minmax(0,1fr)_280px]">
           <div className="space-y-6">
@@ -1823,7 +1908,9 @@ function HomePage() {
           label="Report tool"
           title="Monthly Planned Unplanned"
           description="Monthly call log summary by employee."
+          actions={performanceActions}
         />
+        {performanceDialog}
 
         <main className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_260px] 2xl:grid-cols-[minmax(0,1fr)_280px]">
           <div className="space-y-6">
@@ -2228,7 +2315,9 @@ function HomePage() {
         label="Report tool"
         title="Monthly Report"
         description="PDF to Excel report workbench."
+        actions={performanceActions}
       />
+      {performanceDialog}
 
       <main className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_260px] 2xl:grid-cols-[minmax(0,1fr)_280px]">
         <div className="space-y-6">
@@ -2769,11 +2858,13 @@ function ModulePageHeader({
   label,
   title,
   description,
+  actions,
 }: {
   icon: React.ReactNode;
   label: string;
   title: string;
   description: string;
+  actions?: React.ReactNode;
 }) {
   return (
     <section className="neuro-panel mb-5 p-4 sm:mb-6 sm:p-5">
@@ -2788,8 +2879,88 @@ function ModulePageHeader({
             <p className="text-sm text-muted-foreground">{description}</p>
           </div>
         </div>
+        {actions && <div className="flex shrink-0 justify-end sm:min-w-48">{actions}</div>}
       </div>
     </section>
+  );
+}
+
+function PerformanceHeaderActions({
+  available,
+  onOpen,
+}: {
+  available: boolean;
+  onOpen: () => void;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      onClick={onOpen}
+      className={`neuro-button-muted w-full sm:w-auto ${available ? "" : "opacity-75"}`}
+    >
+      <BarChart3 className="mr-2 h-4 w-4" />
+      Top / Low
+    </Button>
+  );
+}
+
+function PerformanceActionsDialog({
+  open,
+  mode,
+  performanceReport,
+  onOpenChange,
+  onModeChange,
+  onDownload,
+}: {
+  open: boolean;
+  mode: "options" | "view";
+  performanceReport: PerformanceReport | null;
+  onOpenChange: (open: boolean) => void;
+  onModeChange: (mode: "options" | "view") => void;
+  onDownload: () => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[90vh] max-w-4xl overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>{performanceReport?.title ?? "Performance"}</DialogTitle>
+        </DialogHeader>
+
+        {!performanceReport ? (
+          <div className="rounded-md border border-dashed border-border p-5 text-sm text-muted-foreground">
+            Generate this report first, then performance details will be available.
+          </div>
+        ) : mode === "options" ? (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Button type="button" size="lg" onClick={() => onModeChange("view")}>
+              <Eye className="mr-2 h-4 w-4" />
+              View Top / Low
+            </Button>
+            <Button type="button" size="lg" variant="outline" onClick={onDownload}>
+              <Download className="mr-2 h-4 w-4" />
+              Download Excel
+            </Button>
+          </div>
+        ) : (
+          <div>
+            <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-sm text-muted-foreground">{performanceReport.description}</p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <Button type="button" variant="outline" onClick={() => onModeChange("options")}>
+                  Back
+                </Button>
+                <Button type="button" onClick={onDownload}>
+                  <Download className="mr-2 h-4 w-4" />
+                  Download
+                </Button>
+              </div>
+            </div>
+            <PerformanceReportView report={performanceReport} />
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -3588,6 +3759,340 @@ function CircularProgress({
   );
 }
 
+function buildPerformanceReport({
+  activeModule,
+  report,
+  dailyReport,
+  bulkDailyReport,
+  coverageReport,
+  monthlyPlannedReport,
+}: {
+  activeModule: ActiveModule;
+  report: ProcessReport | null;
+  dailyReport: DailyReportResult | null;
+  bulkDailyReport: BulkDailyReportResult | null;
+  coverageReport: DoctorCoverageResult | null;
+  monthlyPlannedReport: MonthlyPlannedResult | null;
+}): PerformanceReport | null {
+  if (activeModule === "monthly-report" && report) return buildMonthlyPerformanceReport(report);
+  if (activeModule === "monthly-planned" && monthlyPlannedReport) {
+    return buildMonthlyPlannedPerformanceReport(monthlyPlannedReport);
+  }
+  if (activeModule === "daily-report") {
+    if (bulkDailyReport) return buildBulkDailyPerformanceReport(bulkDailyReport);
+    if (dailyReport) return buildDailyPerformanceReport(dailyReport);
+  }
+  if (activeModule === "doctor-coverage" && coverageReport) {
+    return buildCoveragePerformanceReport(coverageReport);
+  }
+
+  return null;
+}
+
+function buildMonthlyPerformanceReport(report: ProcessReport): PerformanceReport {
+  const rows = report.performanceRows.map((row) => ({
+    teamName: row.teamName,
+    employeeCode: row.employeeCode,
+    name: row.name,
+    designation: row.designation,
+    value: row.totalCalls,
+    note: `${row.totalCalls} calls, ${row.totalSelfies} selfies`,
+    details: {
+      team: row.teamName,
+      employeeId: row.employeeCode,
+      name: row.name,
+      designation: row.designation,
+      totalCalls: row.totalCalls,
+      totalSelfies: row.totalSelfies,
+      callsPerDay: row.callsPerDay,
+      selfiesPerDay: row.selfiesPerDay,
+      plannedCalls: row.planned,
+      unplannedCalls: row.unplanned,
+      plannedPercent: row.plannedPercent,
+      cpTime: row.cpTime || "Not available",
+    },
+    topQualified: row.topQualified,
+    lowScore: row.callsPerDay + row.selfiesPerDay + row.plannedPercent,
+  }));
+  return {
+    title: "Monthly Report Performance",
+    description:
+      "Top: 10 calls/day, 10 selfies/day, and 70% planned calls. CP time is not available from monthly PDF data.",
+    fileName: report.fileName.replace(/\.xlsx$/i, "") + " - Performance.xlsx",
+    topRows: rows
+      .filter((row) => row.topQualified)
+      .sort((a, b) => Number(b.value) - Number(a.value))
+      .slice(0, 20),
+    lowRows: [
+      ...buildReviewRows(report.unmatchedNames),
+      ...rows
+        .filter((row) => !row.topQualified)
+        .sort((a, b) => a.lowScore - b.lowScore)
+        .slice(0, 20),
+    ],
+    summaryRows: [
+      {
+        totalEmployees: report.totalEmployees,
+        matchedEmployees: report.matchedEmployees,
+        needsReview: report.unmatchedNames.length,
+        daysCovered: report.dates.length,
+      },
+    ],
+  };
+}
+
+function buildMonthlyPlannedPerformanceReport(report: MonthlyPlannedResult): PerformanceReport {
+  const rows = report.performanceRows.map((row) => ({
+    teamName: row.teamName,
+    employeeCode: row.employeeCode,
+    name: row.name,
+    designation: row.designation,
+    value: row.plannedPercent,
+    note: `${row.plannedPercent}% planned, ${row.totalCalls} calls`,
+    details: {
+      team: row.teamName,
+      employeeId: row.employeeCode,
+      name: row.name,
+      designation: row.designation,
+      plannedCalls: row.planned,
+      unplannedCalls: row.unplanned,
+      totalCalls: row.totalCalls,
+      plannedPercent: row.plannedPercent,
+      cpAvgTime: row.cpAvgTime,
+    },
+    topQualified: row.topQualified,
+  }));
+  return {
+    title: "Monthly Planned Unplanned Performance",
+    description: "Top: employees with 70% or higher planned calls.",
+    fileName: report.fileName.replace(/\.xlsx$/i, "") + " - Performance.xlsx",
+    topRows: rows
+      .filter((row) => row.topQualified)
+      .sort((a, b) => Number(b.value) - Number(a.value))
+      .slice(0, 20),
+    lowRows: [
+      ...buildReviewRows(report.unmatchedEmployees),
+      ...rows
+        .filter((row) => !row.topQualified)
+        .sort((a, b) => Number(a.value) - Number(b.value))
+        .slice(0, 20),
+    ],
+    summaryRows: [
+      {
+        totalEmployees: report.totalEmployees,
+        matchedEmployees: report.matchedEmployees,
+        needsReview: report.unmatchedEmployees.length,
+      },
+    ],
+  };
+}
+
+function buildDailyPerformanceReport(report: DailyReportResult): PerformanceReport {
+  const unmatched = Math.max(report.totalEmployees - report.matchedEmployees, 0);
+  const rows = dailyPerformanceRows(report.performanceRows);
+  return {
+    title: "Daily Report Performance",
+    description: "Top: 10 calls, 10 selfies, CP before 10:00, and 65% planned calls.",
+    fileName: report.fileName.replace(/\.xlsx$/i, "") + " - Performance.xlsx",
+    topRows: rows
+      .filter((row) => row.topQualified)
+      .sort((a, b) => Number(b.value) - Number(a.value))
+      .slice(0, 20),
+    lowRows: [
+      ...buildReviewRows(report.unmatchedEmployees),
+      ...rows
+        .filter((row) => !row.topQualified)
+        .sort((a, b) => Number(a.value) - Number(b.value))
+        .slice(0, 20),
+    ],
+    summaryRows: [
+      {
+        totalEmployees: report.totalEmployees,
+        matchedEmployees: report.matchedEmployees,
+        reviewEmployees: unmatched,
+        callRows: report.debug.callRows,
+        faceToFaceRows: report.debug.faceToFaceRows,
+        contactPointRows: report.debug.contactPointRows,
+        selfieFiles: report.debug.selfieFiles,
+        selfieImages: report.debug.selfieRows,
+      },
+    ],
+  };
+}
+
+function buildBulkDailyPerformanceReport(report: BulkDailyReportResult): PerformanceReport {
+  const rows = dailyPerformanceRows(report.performanceRows);
+  return {
+    title: "Daily Report Performance",
+    description: "Top: 10 calls, 10 selfies, CP before 10:00, and 65% planned calls.",
+    fileName: report.fileName.replace(/\.xlsx$/i, "") + " - Performance.xlsx",
+    topRows: rows
+      .filter((row) => row.topQualified)
+      .sort((a, b) => Number(b.value) - Number(a.value))
+      .slice(0, 20),
+    lowRows: rows
+      .filter((row) => !row.topQualified)
+      .sort((a, b) => Number(a.value) - Number(b.value))
+      .slice(0, 20),
+    summaryRows: [
+      {
+        totalTeams: report.totalTeams,
+        reportsGenerated: report.reportsGenerated,
+        failedReports: report.failedReports,
+      },
+    ],
+  };
+}
+
+function buildCoveragePerformanceReport(report: DoctorCoverageResult): PerformanceReport {
+  const unmatched = Math.max(report.totalEmployees - report.matchedEmployees, 0);
+  const rows = report.performanceRows.map((row) => ({
+    teamName: row.teamName,
+    employeeCode: row.employeeCode,
+    name: row.name,
+    designation: row.designation,
+    value: row.coveragePercent,
+    note: `${row.coveredDoctors}/${row.targetDoctors} doctors`,
+    details: {
+      team: row.teamName,
+      employeeId: row.employeeCode,
+      name: row.name,
+      designation: row.designation,
+      targetDoctors: row.targetDoctors,
+      coveredDoctors: row.coveredDoctors,
+      coveragePercent: row.coveragePercent,
+    },
+    topQualified: row.topQualified,
+  }));
+  return {
+    title: "Doctor Coverage Performance",
+    description: "Top: employees with 75% or higher doctor coverage.",
+    fileName: report.fileName.replace(/\.xlsx$/i, "") + " - Performance.xlsx",
+    topRows: rows
+      .filter((row) => row.topQualified)
+      .sort((a, b) => Number(b.value) - Number(a.value))
+      .slice(0, 20),
+    lowRows: [
+      ...buildReviewRows(report.unmatchedEmployees),
+      ...rows
+        .filter((row) => !row.topQualified)
+        .sort((a, b) => Number(a.value) - Number(b.value))
+        .slice(0, 20),
+    ],
+    summaryRows: [
+      {
+        totalEmployees: report.totalEmployees,
+        matchedEmployees: report.matchedEmployees,
+        reviewEmployees: unmatched,
+        coverageRows: report.debug.sourceRows,
+        sampleRows: report.debug.templateRows,
+      },
+    ],
+  };
+}
+
+function dailyPerformanceRows(
+  rows: DailyReportResult["performanceRows"],
+): Array<PerformanceRow & { topQualified: boolean }> {
+  return rows.map((row) => ({
+    teamName: row.teamName,
+    employeeCode: row.employeeCode,
+    name: row.name,
+    designation: row.designation,
+    value: row.totalCalls,
+    note: `${row.totalCalls} calls, ${row.selfies} selfies, ${row.plannedPercent}% planned`,
+    details: {
+      team: row.teamName,
+      employeeId: row.employeeCode,
+      name: row.name,
+      designation: row.designation,
+      plannedCalls: row.planned,
+      unplannedCalls: row.unplanned,
+      totalCalls: row.totalCalls,
+      selfies: row.selfies,
+      cpTime: row.cpTime,
+      plannedPercent: row.plannedPercent,
+    },
+    topQualified: row.topQualified,
+  }));
+}
+
+function buildReviewRows(reviewNames: string[]): PerformanceRow[] {
+  return reviewNames.map((name) => ({
+    name,
+    value: "Review",
+    note: "Needs review",
+  }));
+}
+
+function PerformanceReportView({ report }: { report: PerformanceReport }) {
+  return (
+    <section className="mt-6">
+      <div className="mb-3">
+        <div className="text-xs font-bold uppercase tracking-wide text-primary">Performance</div>
+        <h3 className="text-lg font-semibold text-foreground">{report.title}</h3>
+        <p className="text-sm text-muted-foreground">{report.description}</p>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <PerformancePanel
+          title="Top performance"
+          rows={report.topRows}
+          empty="No top data found."
+        />
+        <PerformancePanel
+          title="Low / needs review"
+          rows={report.lowRows}
+          empty="No low or review rows found."
+        />
+      </div>
+    </section>
+  );
+}
+
+function PerformancePanel({
+  title,
+  rows,
+  empty,
+}: {
+  title: string;
+  rows: PerformanceRow[];
+  empty: string;
+}) {
+  return (
+    <div className="rounded-md border border-border bg-muted/20 p-4">
+      <div className="mb-3 text-sm font-semibold text-foreground">{title}</div>
+      {rows.length ? (
+        <div className="space-y-2">
+          {rows.slice(0, 12).map((row, index) => (
+            <div
+              key={`${row.name}-${index}`}
+              className="flex items-center justify-between gap-3 rounded-md border border-border bg-background/60 px-3 py-2 text-sm"
+            >
+              <div className="min-w-0">
+                <div className="truncate font-semibold text-foreground">{row.name}</div>
+                {(row.employeeCode || row.designation || row.teamName) && (
+                  <div className="truncate text-xs text-muted-foreground">
+                    {[row.employeeCode, row.designation, row.teamName].filter(Boolean).join(" - ")}
+                  </div>
+                )}
+                {row.note && (
+                  <div className="truncate text-xs text-muted-foreground">{row.note}</div>
+                )}
+              </div>
+              <div className="shrink-0 font-bold text-primary">{row.value}</div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="flex min-h-36 items-center justify-center rounded-md border border-dashed border-border text-sm text-muted-foreground">
+          {empty}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function buildReportMix(items: ReportHistoryItem[]) {
   const colors = ["#0b6f6a", "#2563eb", "#db2777", "#ca8a04"];
   const counts = new Map<string, number>();
@@ -4218,6 +4723,99 @@ async function buildSheetPreview(blob: Blob, preferredSheetName?: string): Promi
   }
 
   return { name: ws.name || "Sheet preview", sheetName: ws.name, rows };
+}
+
+async function buildPerformanceWorkbook(report: PerformanceReport): Promise<Blob> {
+  const ExcelJS = (await import("exceljs")).default;
+  const wb = new ExcelJS.Workbook();
+  wb.creator = APP_NAME;
+  wb.created = new Date();
+
+  const sheets = [
+    { name: "Summary", rows: report.summaryRows },
+    { name: "Top Performance", rows: performanceRowsToSheetRows(report.topRows) },
+    { name: "Low Performance", rows: performanceRowsToSheetRows(report.lowRows) },
+  ];
+
+  for (const sheet of sheets) {
+    const rows = sheet.rows.length ? sheet.rows : [{ status: "No performance data available" }];
+    const ws = wb.addWorksheet(safeWorksheetName(sheet.name));
+    const keys = Array.from(
+      rows.reduce((set, row) => {
+        Object.keys(row).forEach((key) => set.add(key));
+        return set;
+      }, new Set<string>()),
+    );
+
+    ws.columns = keys.map((key) => ({
+      header: toTitleCase(key.replace(/([A-Z])/g, " $1")),
+      key,
+      width: Math.max(14, Math.min(32, key.length + 6)),
+    }));
+    rows.forEach((row) => ws.addRow(row));
+    ws.spliceRows(1, 0, [`${report.title} - ${sheet.name}`], [report.description]);
+    ws.mergeCells(1, 1, 1, Math.max(keys.length, 1));
+    ws.mergeCells(2, 1, 2, Math.max(keys.length, 1));
+    ws.getRow(1).font = { bold: true, size: 14 };
+    ws.getRow(2).font = { italic: true, color: { argb: "FF64748B" } };
+    ws.getRow(1).alignment = { horizontal: "center" };
+    ws.getRow(2).alignment = { horizontal: "center" };
+    ws.views = [{ state: "frozen", ySplit: 3 }];
+
+    const header = ws.getRow(3);
+    header.font = { bold: true };
+    header.alignment = { horizontal: "center" };
+    header.eachCell((cell) => {
+      cell.fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "FFE6F4F1" },
+      };
+      cell.border = {
+        top: { style: "thin" },
+        left: { style: "thin" },
+        bottom: { style: "thin" },
+        right: { style: "thin" },
+      };
+    });
+
+    ws.eachRow((row) => {
+      row.eachCell((cell) => {
+        cell.alignment = { vertical: "middle" };
+        cell.border = {
+          top: { style: "thin" },
+          left: { style: "thin" },
+          bottom: { style: "thin" },
+          right: { style: "thin" },
+        };
+      });
+    });
+  }
+
+  const buffer = await wb.xlsx.writeBuffer();
+  return new Blob([buffer], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+}
+
+function performanceRowsToSheetRows(rows: PerformanceRow[]): Record<string, string | number>[] {
+  return rows.map((row) => ({
+    team: row.teamName ?? row.details?.team ?? "",
+    employeeId: row.employeeCode ?? row.details?.employeeId ?? "",
+    name: row.name,
+    designation: row.designation ?? row.details?.designation ?? "",
+    value: row.value,
+    note: row.note ?? "",
+    ...(row.details ?? {}),
+  }));
+}
+
+function safeWorksheetName(value: string): string {
+  return (value || "Performance")
+    .replace(/[:\\/?*[\]]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 31);
 }
 
 async function applySheetPreviewEdits(blob: Blob, preview: SheetPreview): Promise<Blob> {

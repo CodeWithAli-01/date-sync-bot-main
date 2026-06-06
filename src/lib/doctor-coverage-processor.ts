@@ -13,6 +13,18 @@ export interface DoctorCoverageResult {
   fileName: string;
   sheetName: string;
   preview: { name: string; total: number }[];
+  performanceRows: DoctorCoveragePerformanceRow[];
+}
+
+export interface DoctorCoveragePerformanceRow {
+  teamName: string;
+  employeeCode: string;
+  name: string;
+  designation: string;
+  targetDoctors: number;
+  coveredDoctors: number;
+  coveragePercent: number;
+  topQualified: boolean;
 }
 
 interface CoverageRow {
@@ -28,6 +40,7 @@ interface CoverageRow {
 interface TemplateColumns {
   codeCol: number;
   nameCol: number;
+  designationCol?: number;
   headerRow: number;
   targetDoctorsCol: number;
   coveredDoctorsCol: number;
@@ -68,6 +81,7 @@ const SOURCE_HINTS: Record<string, string[]> = {
 const TEMPLATE_HINTS: Record<string, string[]> = {
   code: ["employee code", "emp code", "employee id", "emp id", "emp. id", "code"],
   name: ["name", "employee name"],
+  designation: ["designation", "desig", "position", "title"],
 };
 
 const COVERAGE_OUTPUT_HEADERS = {
@@ -90,6 +104,7 @@ export async function processDoctorCoverageReport(
 
   const allMatchedKeys = new Set<string>();
   const preview: { name: string; total: number }[] = [];
+  const performanceRows: DoctorCoveragePerformanceRow[] = [];
   let matchedEmployees = 0;
   let templateRows = 0;
   let firstSheetName = sheets[0].name;
@@ -102,6 +117,7 @@ export async function processDoctorCoverageReport(
     templateRows += result.templateRows;
     result.matchedKeys.forEach((key) => allMatchedKeys.add(key));
     preview.push(...result.preview);
+    performanceRows.push(...result.performanceRows);
   }
 
   const unmatched = new Set(
@@ -130,6 +146,7 @@ export async function processDoctorCoverageReport(
     fileName: templateFile.name.replace(/\.xlsx$/i, "") + " - Doctor Coverage Report.xlsx",
     sheetName: firstSheetName,
     preview: preview.sort((a, b) => b.total - a.total).slice(0, 10),
+    performanceRows,
   };
 }
 
@@ -139,6 +156,7 @@ function fillCoverageSheet(sheet: ExcelJS.Worksheet, sourceRows: CoverageRow[]) 
   const matchedKeys = new Set<string>();
   const columns = ensureTemplateColumns(sheet);
   const preview: { name: string; total: number }[] = [];
+  const performanceRows: DoctorCoveragePerformanceRow[] = [];
   let matchedEmployees = 0;
   let templateRows = 0;
 
@@ -162,9 +180,19 @@ function fillCoverageSheet(sheet: ExcelJS.Worksheet, sourceRows: CoverageRow[]) 
     row.getCell(columns.coveragePercentCol).value = match.coveragePercent;
     styleCoverageCells(row, columns);
     preview.push({ name: name || match.name, total: match.coveredDoctors });
+    performanceRows.push({
+      teamName: match.teamName || sheet.name,
+      employeeCode: code || match.code,
+      name: name || match.name,
+      designation: columns.designationCol ? cellText(row.getCell(columns.designationCol)) : "",
+      targetDoctors: match.targetDoctors,
+      coveredDoctors: match.coveredDoctors,
+      coveragePercent: coverageNumber(match.targetDoctors, match.coveredDoctors),
+      topQualified: coverageNumber(match.targetDoctors, match.coveredDoctors) >= 75,
+    });
   }
 
-  return { matchedEmployees, templateRows, matchedKeys, preview };
+  return { matchedEmployees, templateRows, matchedKeys, preview, performanceRows };
 }
 
 async function readCoverageRows(input: File | File[]): Promise<CoverageRow[]> {
@@ -353,6 +381,7 @@ function ensureTemplateColumns(sheet: ExcelJS.Worksheet): TemplateColumns {
 
     const codeCol = findHeader(labels, TEMPLATE_HINTS.code, false);
     const nameCol = findHeader(labels, TEMPLATE_HINTS.name, false);
+    const designationCol = findHeader(labels, TEMPLATE_HINTS.designation, false);
     if (!codeCol || !nameCol) continue;
 
     const lastUsedCol = Math.max(findLastUsedColumn(sheet), nameCol);
@@ -399,6 +428,7 @@ function ensureTemplateColumns(sheet: ExcelJS.Worksheet): TemplateColumns {
     return {
       codeCol,
       nameCol,
+      designationCol: designationCol || undefined,
       headerRow: rowNumber,
       targetDoctorsCol,
       coveredDoctorsCol,
@@ -573,4 +603,8 @@ function coverageText(cell: ExcelJS.Cell, targetDoctors: number, coveredDoctors:
 function formatCoveragePercent(targetDoctors: number, coveredDoctors: number): string {
   if (!targetDoctors) return "";
   return `${Math.round((coveredDoctors / targetDoctors) * 100)}%`;
+}
+
+function coverageNumber(targetDoctors: number, coveredDoctors: number): number {
+  return targetDoctors > 0 ? Math.round((coveredDoctors / targetDoctors) * 100) : 0;
 }
