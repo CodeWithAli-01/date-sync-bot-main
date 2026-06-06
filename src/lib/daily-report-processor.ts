@@ -74,6 +74,7 @@ interface CallSummary {
   total: number;
   cpTime: string;
   selfies: number | null;
+  remarks: Set<string>;
 }
 
 interface DailyColumns {
@@ -86,6 +87,7 @@ interface DailyColumns {
   eveningCol: number;
   totalCol: number;
   cpCol: number;
+  remarksCol?: number;
   selfieCol?: number;
   teamCol?: number;
   designationCol?: number;
@@ -121,6 +123,17 @@ const SELFIE_BORDER: Partial<ExcelJS.Borders> = {
   bottom: { style: "thin", color: { argb: "FF000000" } },
   right: { style: "thin", color: { argb: "FF000000" } },
 };
+
+const DAILY_REMARK_KEYWORDS = [
+  "SICK LEAVE",
+  "VISIT",
+  "TOUR",
+  "TRAVELLING",
+  "MEETING",
+  "TRAINING",
+  "PRODUCT LAUNCH",
+  "CASUAL LEAVE",
+] as const;
 
 type DailyTeamSource =
   | {
@@ -170,7 +183,7 @@ const CALL_HEADER_HINTS: Record<string, string[]> = {
   date: ["date", "call date", "start date", "activity date"],
   startTime: ["start time"],
   eventType: ["event type"],
-  meetingType: ["meeting type"],
+  meetingType: ["meeting type", "meetingtype"],
   shift: ["shift"],
   team: ["team name", "team id", "team"],
 };
@@ -185,6 +198,7 @@ const TEMPLATE_HEADER_HINTS: Record<string, string[]> = {
   evening: ["eve", "evening"],
   total: ["total"],
   cp: ["cp"],
+  remarks: ["remarks", "remark"],
   selfies: ["selfies", "selfie", "images", "image"],
   designation: ["designation", "desig", "position", "title"],
 };
@@ -402,7 +416,9 @@ function processDailySheet(
   removeRemarksColumns(sheet);
   const columns = findTemplateColumns(sheet);
   if (!columns) throw new Error("Template columns were not found.");
-  const outputColumns = callLog.selfieFileCount > 0 ? ensureSelfieColumn(sheet, columns) : columns;
+  const withSelfieColumn =
+    callLog.selfieFileCount > 0 ? ensureSelfieColumn(sheet, columns) : columns;
+  const outputColumns = ensureRemarksColumn(sheet, withSelfieColumn);
 
   const summariesByTeamCode = new Map(
     callLog.summaries.map((item) => [callSummaryKey(item.teamName, item.code), item]),
@@ -445,6 +461,11 @@ function processDailySheet(
     row.getCell(outputColumns.eveningCol).value = match.evening || 0;
     row.getCell(outputColumns.totalCol).value = match.total || 0;
     row.getCell(outputColumns.cpCol).value = match.cpTime || null;
+    if (outputColumns.remarksCol) {
+      const remarksCell = row.getCell(outputColumns.remarksCol);
+      remarksCell.value = formatRemarks(match.remarks);
+      styleRemarksCell(remarksCell);
+    }
     styleDailyCells(row, outputColumns);
     if (outputColumns.selfieCol) {
       const selfieCell = row.getCell(outputColumns.selfieCol);
@@ -480,6 +501,7 @@ function processDailySheet(
   }
 
   applySelfieColumnStyles(sheet, outputColumns);
+  applyRemarksColumnStyles(sheet, outputColumns);
 
   return {
     totalEmployees,
@@ -721,11 +743,15 @@ function readCallLogSheet(
         total: 0,
         cpTime: "",
         selfies: null,
+        remarks: new Set<string>(),
       };
       byKey.set(summaryKey, summary);
     }
 
     callRows++;
+    extractDailyRemarks(cellText(row.getCell(columns.meetingTypeCol))).forEach((remark) =>
+      summary.remarks.add(remark),
+    );
     const dateKey = columns.dateCol
       ? normalizeDateKey(row.getCell(columns.dateCol).value, cellText(row.getCell(columns.dateCol)))
       : "";
@@ -840,6 +866,7 @@ async function readCallLogs(files: File | File[]): Promise<{
       existing.morning += summary.morning;
       existing.evening += summary.evening;
       existing.total += summary.total;
+      summary.remarks.forEach((remark) => existing.remarks.add(remark));
       if (!existing.cpTime && summary.cpTime) existing.cpTime = summary.cpTime;
     }
   }
@@ -1106,6 +1133,31 @@ function isImageMessage(body: string, type: string): boolean {
   return normalizedBody.includes("image") || normalizedType === "image";
 }
 
+function extractDailyRemarks(meetingTypeText: string): string[] {
+  const normalizedMeetingType = normalizeRemarkText(meetingTypeText);
+  if (!normalizedMeetingType) return [];
+
+  return DAILY_REMARK_KEYWORDS.filter((keyword) =>
+    new RegExp(`(^|\\s)${escapeRegExp(normalizeRemarkText(keyword))}(?=\\s|$)`).test(
+      normalizedMeetingType,
+    ),
+  );
+}
+
+function formatRemarks(remarks: Set<string>): string {
+  return DAILY_REMARK_KEYWORDS.filter((keyword) => remarks.has(keyword)).join(", ");
+}
+
+function normalizeRemarkText(value: string): string {
+  return normalize(value)
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function percent(part: number, total: number): number {
   return total > 0 ? Math.round((part / total) * 100) : 0;
 }
@@ -1146,6 +1198,7 @@ function findTemplateColumns(sheet: ExcelJS.Worksheet, required = true): DailyCo
     const eveningCol = findHeader(labels, TEMPLATE_HEADER_HINTS.evening, false);
     const totalCol = findHeader(labels, TEMPLATE_HEADER_HINTS.total, false);
     const cpCol = findHeader(labels, TEMPLATE_HEADER_HINTS.cp, false);
+    const remarksCol = findHeader(labels, TEMPLATE_HEADER_HINTS.remarks, false);
     const selfieCol = findHeader(labels, TEMPLATE_HEADER_HINTS.selfies, false);
     const designationCol = findHeader(labels, TEMPLATE_HEADER_HINTS.designation, false);
 
@@ -1169,6 +1222,7 @@ function findTemplateColumns(sheet: ExcelJS.Worksheet, required = true): DailyCo
         eveningCol,
         totalCol,
         cpCol,
+        remarksCol: remarksCol || undefined,
         selfieCol: selfieCol || undefined,
         teamCol: teamCol || undefined,
         designationCol: designationCol || undefined,
@@ -1242,6 +1296,97 @@ function restoreSheetTitleValue(
   }
 }
 
+function repairSheetTitleAfterColumnInsert(
+  sheet: ExcelJS.Worksheet,
+  headerRowNumber: number,
+  titleValue: string,
+) {
+  const normalizedTitle = normalize(titleValue);
+  if (!normalizedTitle) return;
+
+  for (let rowNumber = 1; rowNumber < headerRowNumber; rowNumber++) {
+    const row = sheet.getRow(rowNumber);
+    let rowHasTitle = false;
+    for (let colNumber = 1; colNumber <= sheet.columnCount; colNumber++) {
+      if (normalize(cellText(row.getCell(colNumber)).trim()) === normalizedTitle) {
+        rowHasTitle = true;
+        break;
+      }
+    }
+    if (!rowHasTitle) continue;
+
+    const targetCell = firstWritableTitleCell(row, sheet.columnCount);
+    targetCell.value = titleValue;
+
+    for (let colNumber = 1; colNumber <= sheet.columnCount; colNumber++) {
+      const cell = row.getCell(colNumber);
+      const writableCell = cell.isMerged ? cell.master : cell;
+      if (writableCell.address === targetCell.address) continue;
+      if (normalize(cellText(cell).trim()) === normalizedTitle) writableCell.value = null;
+    }
+
+    row.commit();
+    return;
+  }
+}
+
+function firstWritableTitleCell(row: ExcelJS.Row, columnCount: number): ExcelJS.Cell {
+  for (let colNumber = 1; colNumber <= columnCount; colNumber++) {
+    const cell = row.getCell(colNumber);
+    if (cell.isMerged && cell.master?.address !== cell.address) continue;
+    if (cell.isMerged || colNumber === 1) return cell.isMerged ? cell.master : cell;
+  }
+  return row.getCell(1);
+}
+
+function ensureRemarksColumn(sheet: ExcelJS.Worksheet, columns: DailyColumns): DailyColumns {
+  if (columns.remarksCol) {
+    sheet.getColumn(columns.remarksCol).width = Math.max(
+      sheet.getColumn(columns.remarksCol).width ?? 0,
+      20,
+    );
+    sheet.getRow(columns.headerRow).getCell(columns.remarksCol).border = {
+      ...(sheet.getRow(columns.headerRow).getCell(columns.remarksCol).border ?? {}),
+      ...SELFIE_BORDER,
+    };
+    return columns;
+  }
+
+  const header = sheet.getRow(columns.headerRow);
+  const insertAt = columns.selfieCol ? columns.selfieCol + 1 : columns.cpCol + 1;
+  const titleValue = findSheetTitleValue(sheet, columns.headerRow);
+  sheet.spliceColumns(insertAt, 0, []);
+  const headerCell = header.getCell(insertAt);
+  const sourceHeader = header.getCell(columns.selfieCol ?? columns.cpCol);
+  headerCell.value = "Remarks";
+  headerCell.style = cloneStyle(sourceHeader.style);
+  headerCell.border = { ...(headerCell.border ?? {}), ...SELFIE_BORDER };
+  sheet.getColumn(insertAt).width = Math.max(sheet.getColumn(insertAt).width ?? 0, 20);
+  header.commit();
+  repairSheetTitleAfterColumnInsert(sheet, columns.headerRow, titleValue);
+
+  return shiftDailyColumnsAfterInsert({ ...columns, remarksCol: insertAt }, insertAt);
+}
+
+function shiftDailyColumnsAfterInsert(columns: DailyColumns, insertAt: number): DailyColumns {
+  const shift = (col: number | undefined) => (col && col >= insertAt ? col + 1 : col);
+  return {
+    ...columns,
+    codeCol: shift(columns.codeCol)!,
+    nameCol: shift(columns.nameCol)!,
+    plannedCol: shift(columns.plannedCol)!,
+    unplannedCol: shift(columns.unplannedCol)!,
+    morningCol: shift(columns.morningCol)!,
+    eveningCol: shift(columns.eveningCol)!,
+    totalCol: shift(columns.totalCol)!,
+    cpCol: shift(columns.cpCol)!,
+    selfieCol: shift(columns.selfieCol),
+    teamCol: shift(columns.teamCol),
+    designationCol: shift(columns.designationCol),
+    remarksCol: insertAt,
+  };
+}
+
 function ensureSelfieColumn(sheet: ExcelJS.Worksheet, columns: DailyColumns): DailyColumns {
   if (columns.selfieCol) {
     sheet.getColumn(columns.selfieCol).width = Math.max(
@@ -1304,12 +1449,15 @@ function clearDailyCells(row: ExcelJS.Row, columns: DailyColumns) {
     columns.eveningCol,
     columns.totalCol,
     columns.cpCol,
+    columns.remarksCol,
     columns.selfieCol,
   ].filter((col): col is number => Boolean(col))) {
     const cell = row.getCell(col);
     cell.value = null;
     if (col === columns.selfieCol) {
       applyIsolatedSelfieStyle(cell, undefined);
+    } else if (col === columns.remarksCol) {
+      styleRemarksCell(cell);
     }
   }
 }
@@ -1322,6 +1470,7 @@ function styleDailyCells(row: ExcelJS.Row, columns: DailyColumns) {
     columns.eveningCol,
     columns.totalCol,
     columns.cpCol,
+    columns.remarksCol,
     columns.selfieCol,
   ].filter((col): col is number => Boolean(col))) {
     const cell = row.getCell(col);
@@ -1352,6 +1501,21 @@ function applySelfieColumnStyles(sheet: ExcelJS.Worksheet, columns: DailyColumns
   }
 }
 
+function applyRemarksColumnStyles(sheet: ExcelJS.Worksheet, columns: DailyColumns) {
+  if (!columns.remarksCol) return;
+
+  const headerCell = sheet.getRow(columns.headerRow).getCell(columns.remarksCol);
+  headerCell.border = { ...(headerCell.border ?? {}), ...SELFIE_BORDER };
+  sheet.getColumn(columns.remarksCol).width = Math.max(
+    sheet.getColumn(columns.remarksCol).width ?? 0,
+    20,
+  );
+
+  for (let rowNumber = columns.headerRow + 1; rowNumber <= sheet.rowCount; rowNumber++) {
+    styleRemarksCell(sheet.getRow(rowNumber).getCell(columns.remarksCol));
+  }
+}
+
 function formatSelfieText(count: number): string {
   if (count <= 0) return "0 selfies 0 locations";
   if (count === 1) return "1 selfie with location";
@@ -1376,6 +1540,11 @@ function styleSelfieCell(cell: ExcelJS.Cell, count: number) {
   applyIsolatedSelfieStyle(cell, undefined);
 }
 
+function styleRemarksCell(cell: ExcelJS.Cell) {
+  cell.alignment = { ...(cell.alignment ?? {}), horizontal: "center", vertical: "middle" };
+  cell.border = { ...(cell.border ?? {}), ...SELFIE_BORDER };
+}
+
 function applyIsolatedSelfieStyle(cell: ExcelJS.Cell, fill: ExcelJS.Fill | undefined) {
   const {
     fill: _sharedFill,
@@ -1389,6 +1558,10 @@ function applyIsolatedSelfieStyle(cell: ExcelJS.Cell, fill: ExcelJS.Fill | undef
     border: { ...(sharedBorder ?? {}), ...SELFIE_BORDER },
     ...(fill ? { fill: cloneFill(fill) } : {}),
   };
+}
+
+function cloneStyle(style: Partial<ExcelJS.Style>): Partial<ExcelJS.Style> {
+  return JSON.parse(JSON.stringify(style ?? {})) as Partial<ExcelJS.Style>;
 }
 
 function cloneFill(fill: ExcelJS.Fill): ExcelJS.Fill {
