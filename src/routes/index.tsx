@@ -829,6 +829,7 @@ function HomePage() {
           blob: bulkResult.blob,
         });
         await refreshHistory(true);
+        if (bulkResult.warnings.length) toast.warning(bulkResult.warnings[0]);
         toast.success(
           `Daily report ready. ${bulkResult.reportsGenerated}/${bulkResult.totalTeams} team sheet(s) updated.`,
         );
@@ -1481,6 +1482,16 @@ function HomePage() {
                   </div>
                 </div>
 
+                {(dailyReport?.warnings.length || bulkDailyReport?.warnings.length) && (
+                  <div className="mt-5 space-y-2 rounded-md border border-warning/40 bg-warning/10 p-3 text-sm text-warning-foreground">
+                    {(dailyReport?.warnings ?? bulkDailyReport?.warnings ?? []).map(
+                      (warning, index) => (
+                        <div key={`${warning}-${index}`}>{warning}</div>
+                      ),
+                    )}
+                  </div>
+                )}
+
                 {dailyReport ? (
                   <>
                     <div className="mt-6 grid gap-4 md:grid-cols-3">
@@ -1489,6 +1500,23 @@ function HomePage() {
                       <Stat label="Contact points" value={dailyReport.debug.contactPointRows} />
                       <Stat label="Selfie files" value={dailyReport.debug.selfieFiles} />
                       <Stat label="Selfie images" value={dailyReport.debug.selfieRows} />
+                      <Stat
+                        label="Selfie matches"
+                        value={dailyReport.debug.selfieMatchedEmployees}
+                      />
+                      <Stat
+                        label="No selfie source"
+                        value={dailyReport.debug.selfieMissingSources}
+                      />
+                      <Stat label="Wrong-date selfies" value={dailyReport.debug.selfieDateMisses} />
+                      <Stat
+                        label="Empty/unreadable files"
+                        value={
+                          dailyReport.debug.selfieEmptyFiles +
+                          dailyReport.debug.selfieColumnMissFiles +
+                          dailyReport.debug.selfieUnreadableFiles
+                        }
+                      />
                     </div>
 
                     {dailyReport.preview.length > 0 && (
@@ -1519,6 +1547,26 @@ function HomePage() {
                         label="Failed reports"
                         value={bulkDailyReport!.failedReports}
                         tone={bulkDailyReport!.failedReports ? "warning" : "default"}
+                      />
+                      <Stat
+                        label="Selfie matches"
+                        value={bulkDailyReport!.debug.selfieMatchedEmployees}
+                      />
+                      <Stat
+                        label="No selfie source"
+                        value={bulkDailyReport!.debug.selfieMissingSources}
+                      />
+                      <Stat
+                        label="Wrong-date selfies"
+                        value={bulkDailyReport!.debug.selfieDateMisses}
+                      />
+                      <Stat
+                        label="Empty/unreadable files"
+                        value={
+                          bulkDailyReport!.debug.selfieEmptyFiles +
+                          bulkDailyReport!.debug.selfieColumnMissFiles +
+                          bulkDailyReport!.debug.selfieUnreadableFiles
+                        }
                       />
                     </div>
 
