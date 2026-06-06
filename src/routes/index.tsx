@@ -193,6 +193,7 @@ function HomePage() {
   const [authLoading, setAuthLoading] = useState(true);
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [passwordRecoveryMode, setPasswordRecoveryMode] = useState(() => isPasswordRecoveryUrl());
+  const passwordRecoveryModeRef = useRef(passwordRecoveryMode);
   const [signingOut, setSigningOut] = useState(false);
   const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
   const [activeDeviceCount, setActiveDeviceCount] = useState<number | null>(null);
@@ -288,7 +289,8 @@ function HomePage() {
       }
 
       const isRecoveryUrl = isPasswordRecoveryUrl();
-      if (isRecoveryUrl) {
+      if (isRecoveryUrl || passwordRecoveryModeRef.current) {
+        passwordRecoveryModeRef.current = true;
         setPasswordRecoveryMode(true);
         setAuthUser(null);
       } else if (data.session) {
@@ -321,7 +323,8 @@ function HomePage() {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
       const isRecoveryUrl = isPasswordRecoveryUrl();
-      if (event === "PASSWORD_RECOVERY" || isRecoveryUrl) {
+      if (event === "PASSWORD_RECOVERY" || isRecoveryUrl || passwordRecoveryModeRef.current) {
+        passwordRecoveryModeRef.current = true;
         setPasswordRecoveryMode(true);
         setAuthUser(null);
         setAuthLoading(false);
@@ -1224,13 +1227,17 @@ function HomePage() {
     );
   }
 
-  if (!authUser) {
+  if (!authUser || passwordRecoveryMode) {
     return (
       <AuthScreen
         color={themeColor}
         mode={themeMode}
         passwordRecoveryMode={passwordRecoveryMode}
-        onRecoveryComplete={() => setPasswordRecoveryMode(false)}
+        onRecoveryComplete={() => {
+          passwordRecoveryModeRef.current = false;
+          setPasswordRecoveryMode(false);
+          setAuthUser(null);
+        }}
         onChange={updateThemeColor}
         onToggleMode={toggleThemeMode}
       />
