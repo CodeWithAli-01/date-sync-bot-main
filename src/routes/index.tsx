@@ -76,7 +76,12 @@ import {
   findProcessedHashes,
   type EmployeeInput,
 } from "@/lib/db-sync";
-import { enforceDeviceLimit, revokeCurrentDeviceSession } from "@/lib/device-auth";
+import {
+  enforceDeviceLimit,
+  getCurrentDeviceId,
+  MAX_AUTH_DEVICES,
+  revokeCurrentDeviceSession,
+} from "@/lib/device-auth";
 
 interface PreviewCell {
   key: string;
@@ -116,6 +121,15 @@ interface ReportHistoryItem {
 
 interface StoredReportHistoryItem extends ReportHistoryItem {
   blob: Blob;
+}
+
+interface ActiveDeviceSession {
+  id: string;
+  deviceId: string;
+  userAgent: string | null;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  isCurrent: boolean;
 }
 
 interface PerformanceReport {
@@ -181,6 +195,7 @@ function HomePage() {
   const [signingOut, setSigningOut] = useState(false);
   const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
   const [activeDeviceCount, setActiveDeviceCount] = useState<number | null>(null);
+  const [activeDevices, setActiveDevices] = useState<ActiveDeviceSession[]>([]);
   const [activeModule, setActiveModule] = useState<ActiveModule>(null);
   const [dashboardLine, setDashboardLine] = useState(DASHBOARD_LINES[0]);
   const [themeColor, setThemeColor] = useState(DEFAULT_THEME_COLOR);
@@ -277,7 +292,10 @@ function HomePage() {
           if (!mounted) return;
           if (!deviceResult.allowed) {
             setAuthUser(null);
-            toast.error(deviceResult.message ?? "This account is already active on 2 devices.");
+            toast.error(
+              deviceResult.message ??
+                `This account is already active on ${MAX_AUTH_DEVICES} devices.`,
+            );
           } else {
             setAuthUser(data.session.user);
           }
@@ -308,7 +326,10 @@ function HomePage() {
           if (!mounted) return;
           if (!deviceResult.allowed) {
             setAuthUser(null);
-            toast.error(deviceResult.message ?? "This account is already active on 2 devices.");
+            toast.error(
+              deviceResult.message ??
+                `This account is already active on ${MAX_AUTH_DEVICES} devices.`,
+            );
             return;
           }
           setAuthUser(session.user);
@@ -574,23 +595,39 @@ function HomePage() {
   useEffect(() => {
     if (!authUser) {
       setActiveDeviceCount(null);
+      setActiveDevices([]);
       return;
     }
 
     void (async () => {
-      const { count, error } = await supabase
+      const activeSince = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      const currentDeviceId = getCurrentDeviceId();
+      const { data, error } = await supabase
         .from("auth_device_sessions")
-        .select("id", { count: "exact", head: true })
+        .select("id, device_id, user_agent, first_seen_at, last_seen_at")
         .eq("user_id", authUser.id)
-        .is("revoked_at", null);
+        .is("revoked_at", null)
+        .gt("last_seen_at", activeSince)
+        .order("last_seen_at", { ascending: false });
 
       if (error) {
-        console.warn("Unable to load active device count", error);
+        console.warn("Unable to load active devices", error);
         setActiveDeviceCount(null);
+        setActiveDevices([]);
         return;
       }
 
-      setActiveDeviceCount(count ?? 0);
+      const devices = (data ?? []).map((item) => ({
+        id: item.id,
+        deviceId: item.device_id,
+        userAgent: item.user_agent,
+        firstSeenAt: item.first_seen_at,
+        lastSeenAt: item.last_seen_at,
+        isCurrent: Boolean(currentDeviceId && item.device_id === currentDeviceId),
+      }));
+
+      setActiveDevices(devices);
+      setActiveDeviceCount(devices.length);
     })();
   }, [authUser]);
 
@@ -1221,6 +1258,7 @@ function HomePage() {
           color={themeColor}
           mode={themeMode}
           activeDeviceCount={activeDeviceCount}
+          activeDevices={activeDevices}
           signingOut={signingOut}
           onProfilePhotoChange={updateProfilePhoto}
           onChange={updateThemeColor}
@@ -3263,6 +3301,42 @@ function profilePhotoStorageKey(user: User): string {
   return `profile-photo:${user.id}`;
 }
 
+function describeDevice(userAgent: string | null): string {
+  const text = userAgent || "";
+  const browser = text.includes("Edg/")
+    ? "Microsoft Edge"
+    : text.includes("OPR/") || text.includes("Opera")
+      ? "Opera"
+      : text.includes("Firefox/")
+        ? "Firefox"
+        : text.includes("Chrome/")
+          ? "Chrome"
+          : text.includes("Safari/")
+            ? "Safari"
+            : "Unknown browser";
+  const platform = text.includes("Android")
+    ? "Android"
+    : text.includes("iPhone") || text.includes("iPad")
+      ? "iOS"
+      : text.includes("Windows")
+        ? "Windows"
+        : text.includes("Mac OS")
+          ? "macOS"
+          : text.includes("Linux")
+            ? "Linux"
+            : "Unknown device";
+  return `${browser} on ${platform}`;
+}
+
+function formatDeviceDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Unknown";
+  return date.toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -3355,6 +3429,7 @@ function ProfilePage({
   color,
   mode,
   activeDeviceCount,
+  activeDevices,
   signingOut,
   onProfilePhotoChange,
   onChange,
@@ -3366,6 +3441,7 @@ function ProfilePage({
   color: string;
   mode: "light" | "dark";
   activeDeviceCount: number | null;
+  activeDevices: ActiveDeviceSession[];
   signingOut: boolean;
   onProfilePhotoChange: (photo: string | null) => void;
   onChange: (color: string) => void;
@@ -3459,7 +3535,9 @@ function ProfilePage({
             <div className="neuro-inset p-4">
               <div className="text-xs font-bold uppercase tracking-wide text-primary">Devices</div>
               <div className="mt-2 text-sm font-semibold text-foreground">
-                {activeDeviceCount ?? "Not available"}
+                {activeDeviceCount === null
+                  ? "Not available"
+                  : `${activeDeviceCount}/${MAX_AUTH_DEVICES}`}
               </div>
             </div>
           </div>
@@ -3561,8 +3639,54 @@ function ProfilePage({
                 <div className="text-sm font-semibold text-foreground">
                   {activeDeviceCount === null
                     ? "Not available"
-                    : `${activeDeviceCount}/2 device(s)`}
+                    : `${activeDeviceCount}/${MAX_AUTH_DEVICES} device(s)`}
                 </div>
+              </div>
+              <div className="neuro-inset p-4 sm:col-span-2">
+                <div className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-primary">
+                  <MonitorSmartphone className="h-4 w-4" />
+                  Device activity
+                </div>
+                {activeDevices.length ? (
+                  <div className="max-h-72 space-y-2 overflow-y-auto pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                    {activeDevices.map((device) => (
+                      <div
+                        key={device.id}
+                        className="rounded-xl border border-border bg-card/45 p-3 text-sm shadow-[var(--shadow-inset)]"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="truncate font-semibold text-foreground">
+                              {describeDevice(device.userAgent)}
+                            </div>
+                            <div className="mt-1 truncate text-xs text-muted-foreground">
+                              {device.userAgent || "Unknown device"}
+                            </div>
+                          </div>
+                          {device.isCurrent && (
+                            <span className="shrink-0 rounded-full bg-primary/10 px-2 py-1 text-xs font-semibold text-primary">
+                              This device
+                            </span>
+                          )}
+                        </div>
+                        <div className="mt-3 grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
+                          <div>
+                            <span className="font-semibold text-foreground">Last used:</span>{" "}
+                            {formatDeviceDate(device.lastSeenAt)}
+                          </div>
+                          <div>
+                            <span className="font-semibold text-foreground">First seen:</span>{" "}
+                            {formatDeviceDate(device.firstSeenAt)}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-sm text-muted-foreground">
+                    Active device details are not available yet.
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -4280,7 +4404,10 @@ function AuthScreen({
         if (result.data.session) {
           const deviceResult = await enforceDeviceLimit(result.data.session);
           if (!deviceResult.allowed) {
-            toast.error(deviceResult.message ?? "This account is already active on 2 devices.");
+            toast.error(
+              deviceResult.message ??
+                `This account is already active on ${MAX_AUTH_DEVICES} devices.`,
+            );
             return;
           }
         }

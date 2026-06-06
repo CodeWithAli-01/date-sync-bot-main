@@ -2,8 +2,8 @@ import { supabase } from "@/integrations/supabase/client";
 import type { Session } from "@supabase/supabase-js";
 
 const DEVICE_ID_KEY = "reporting-management-device-id";
-const DEVICE_BLOCK_MESSAGE =
-  "This account is already active on 2 devices. Please sign out from another device and try again.";
+export const MAX_AUTH_DEVICES = 4;
+const DEVICE_BLOCK_MESSAGE = `This account is already active on ${MAX_AUTH_DEVICES} devices. Please sign out from another device and try again.`;
 
 let activeClaim:
   | {
@@ -71,13 +71,18 @@ async function claimDevice(
 
 export async function revokeCurrentDeviceSession(): Promise<void> {
   if (typeof window === "undefined") return;
-  const deviceId = window.localStorage.getItem(DEVICE_ID_KEY);
+  const deviceId = getCurrentDeviceId();
   if (!deviceId) return;
 
   const { error } = await supabase.rpc("revoke_auth_device", {
     p_device_id: deviceId,
   });
   if (error) throw error;
+}
+
+export function getCurrentDeviceId(): string | null {
+  if (typeof window === "undefined") return null;
+  return window.localStorage.getItem(DEVICE_ID_KEY);
 }
 
 function getOrCreateDeviceId(): string {

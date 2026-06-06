@@ -6,10 +6,12 @@ const corsHeaders = {
 };
 
 const appName = Deno.env.get("APP_NAME") || "Reporting Management";
-const fromAddress = Deno.env.get("SECURITY_ALERT_FROM") || "Reporting Management <onboarding@resend.dev>";
+const fromAddress =
+  Deno.env.get("SECURITY_ALERT_FROM") || "Reporting Management <onboarding@resend.dev>";
 const resendApiKey = Deno.env.get("RESEND_API_KEY");
 const supabaseUrl = Deno.env.get("SUPABASE_URL");
 const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+const maxDevices = Number(Deno.env.get("MAX_AUTH_DEVICES") || 4);
 
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") {
@@ -59,7 +61,7 @@ Deno.serve(async (request) => {
         to: data.user.email,
         subject: `${appName}: blocked login attempt`,
         text: [
-          `A login attempt for your ${appName} account was blocked because your account is already active on 2 devices.`,
+          `A login attempt for your ${appName} account was blocked because your account is already active on ${maxDevices} devices.`,
           "",
           `Attempt time: ${attemptedAt} UTC`,
           `Device: ${userAgent}`,
@@ -69,7 +71,7 @@ Deno.serve(async (request) => {
         html: `
           <div style="font-family:Arial,sans-serif;line-height:1.55;color:#111827">
             <h2 style="margin:0 0 12px">${appName}: blocked login attempt</h2>
-            <p>A login attempt for your account was blocked because your account is already active on <strong>2 devices</strong>.</p>
+            <p>A login attempt for your account was blocked because your account is already active on <strong>${maxDevices} devices</strong>.</p>
             <p><strong>Attempt time:</strong> ${escapeHtml(attemptedAt)} UTC<br />
             <strong>Device:</strong> ${escapeHtml(userAgent)}</p>
             <p>If this was you, sign out from another device and try again. If this was not you, change your password immediately.</p>
@@ -115,7 +117,9 @@ function json(body: unknown, status = 200): Response {
 }
 
 function cleanText(value: unknown, fallback: string): string {
-  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  const text = String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
   return text ? text.slice(0, 500) : fallback;
 }
 
