@@ -1322,31 +1322,23 @@ function HomePage() {
                   }}
                 />
                 {callLogFiles.length ? (
-                  <div className="space-y-2">
-                    {callLogFiles.map((file) => (
-                      <FilePill
-                        key={`${file.name}-${file.lastModified}-${file.size}`}
-                        name={file.name}
-                        onRemove={() => {
-                          setCallLogFiles((current) =>
-                            current.filter(
-                              (item) =>
-                                !(
-                                  item.name === file.name &&
-                                  item.lastModified === file.lastModified &&
-                                  item.size === file.size
-                                ),
-                            ),
-                          );
-                          if (callLogInputRef.current) callLogInputRef.current.value = "";
-                          setDailyReport(null);
-                          setBulkDailyReport(null);
-                          setDailyPreview(null);
-                        }}
-                        color="accent"
-                      />
-                    ))}
-                  </div>
+                  <MultiFileList
+                    files={callLogFiles}
+                    onClear={() => {
+                      setCallLogFiles([]);
+                      if (callLogInputRef.current) callLogInputRef.current.value = "";
+                      setDailyReport(null);
+                      setBulkDailyReport(null);
+                      setDailyPreview(null);
+                    }}
+                    onRemove={(file) => {
+                      setCallLogFiles((current) => current.filter((item) => !sameFile(item, file)));
+                      if (callLogInputRef.current) callLogInputRef.current.value = "";
+                      setDailyReport(null);
+                      setBulkDailyReport(null);
+                      setDailyPreview(null);
+                    }}
+                  />
                 ) : (
                   <EmptyHint
                     icon={<FileSpreadsheet className="h-5 w-5" />}
@@ -1384,31 +1376,25 @@ function HomePage() {
                   }}
                 />
                 {dailySelfieFiles.length ? (
-                  <div className="space-y-2">
-                    {dailySelfieFiles.map((file) => (
-                      <FilePill
-                        key={`${file.name}-${file.lastModified}-${file.size}`}
-                        name={file.name}
-                        onRemove={() => {
-                          setDailySelfieFiles((current) =>
-                            current.filter(
-                              (item) =>
-                                !(
-                                  item.name === file.name &&
-                                  item.lastModified === file.lastModified &&
-                                  item.size === file.size
-                                ),
-                            ),
-                          );
-                          if (dailySelfieInputRef.current) dailySelfieInputRef.current.value = "";
-                          setDailyReport(null);
-                          setBulkDailyReport(null);
-                          setDailyPreview(null);
-                        }}
-                        color="accent"
-                      />
-                    ))}
-                  </div>
+                  <MultiFileList
+                    files={dailySelfieFiles}
+                    onClear={() => {
+                      setDailySelfieFiles([]);
+                      if (dailySelfieInputRef.current) dailySelfieInputRef.current.value = "";
+                      setDailyReport(null);
+                      setBulkDailyReport(null);
+                      setDailyPreview(null);
+                    }}
+                    onRemove={(file) => {
+                      setDailySelfieFiles((current) =>
+                        current.filter((item) => !sameFile(item, file)),
+                      );
+                      if (dailySelfieInputRef.current) dailySelfieInputRef.current.value = "";
+                      setDailyReport(null);
+                      setBulkDailyReport(null);
+                      setDailyPreview(null);
+                    }}
+                  />
                 ) : (
                   <EmptyHint
                     icon={<FileSpreadsheet className="h-5 w-5" />}
@@ -1712,25 +1698,23 @@ function HomePage() {
                   }}
                 />
                 {coverageSourceFiles.length ? (
-                  <div className="grid gap-2">
-                    {coverageSourceFiles.map((file) => (
-                      <FilePill
-                        key={`${file.name}-${file.lastModified}`}
-                        name={file.name}
-                        onRemove={() => {
-                          setCoverageSourceFiles((files) =>
-                            files.filter(
-                              (item) =>
-                                item.name !== file.name || item.lastModified !== file.lastModified,
-                            ),
-                          );
-                          setCoverageReport(null);
-                          setCoveragePreview(null);
-                        }}
-                        color="accent"
-                      />
-                    ))}
-                  </div>
+                  <MultiFileList
+                    files={coverageSourceFiles}
+                    onClear={() => {
+                      setCoverageSourceFiles([]);
+                      if (coverageSourceInputRef.current) coverageSourceInputRef.current.value = "";
+                      setCoverageReport(null);
+                      setCoveragePreview(null);
+                    }}
+                    onRemove={(file) => {
+                      setCoverageSourceFiles((files) =>
+                        files.filter((item) => !sameFile(item, file)),
+                      );
+                      if (coverageSourceInputRef.current) coverageSourceInputRef.current.value = "";
+                      setCoverageReport(null);
+                      setCoveragePreview(null);
+                    }}
+                  />
                 ) : (
                   <EmptyHint
                     icon={<FileSpreadsheet className="h-5 w-5" />}
@@ -1984,25 +1968,27 @@ function HomePage() {
                   }}
                 />
                 {monthlyPlannedCallLogFiles.length ? (
-                  <div className="grid gap-2">
-                    {monthlyPlannedCallLogFiles.map((file) => (
-                      <FilePill
-                        key={`${file.name}-${file.lastModified}`}
-                        name={file.name}
-                        onRemove={() => {
-                          setMonthlyPlannedCallLogFiles((files) =>
-                            files.filter(
-                              (item) =>
-                                item.name !== file.name || item.lastModified !== file.lastModified,
-                            ),
-                          );
-                          setMonthlyPlannedReport(null);
-                          setMonthlyPlannedPreview(null);
-                        }}
-                        color="accent"
-                      />
-                    ))}
-                  </div>
+                  <MultiFileList
+                    files={monthlyPlannedCallLogFiles}
+                    onClear={() => {
+                      setMonthlyPlannedCallLogFiles([]);
+                      if (monthlyPlannedCallLogInputRef.current) {
+                        monthlyPlannedCallLogInputRef.current.value = "";
+                      }
+                      setMonthlyPlannedReport(null);
+                      setMonthlyPlannedPreview(null);
+                    }}
+                    onRemove={(file) => {
+                      setMonthlyPlannedCallLogFiles((files) =>
+                        files.filter((item) => !sameFile(item, file)),
+                      );
+                      if (monthlyPlannedCallLogInputRef.current) {
+                        monthlyPlannedCallLogInputRef.current.value = "";
+                      }
+                      setMonthlyPlannedReport(null);
+                      setMonthlyPlannedPreview(null);
+                    }}
+                  />
                 ) : (
                   <EmptyHint
                     icon={<FileSpreadsheet className="h-5 w-5" />}
@@ -5193,6 +5179,53 @@ function EmptyHint({ icon, label }: { icon: React.ReactNode; label: string }) {
       {label}
     </div>
   );
+}
+
+function MultiFileList({
+  files,
+  onClear,
+  onRemove,
+}: {
+  files: File[];
+  onClear: () => void;
+  onRemove: (file: File) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-3 text-xs font-medium text-muted-foreground">
+        <div className="flex min-w-0 items-center gap-2">
+          <FileSpreadsheet className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate">{files.length} file(s) selected</span>
+        </div>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={(event) => {
+            event.stopPropagation();
+            onClear();
+          }}
+          className="h-7 shrink-0 px-2 text-xs"
+        >
+          Clear All
+        </Button>
+      </div>
+      <div className="report-card-scroll max-h-44 space-y-1.5 overflow-y-auto pr-1">
+        {files.map((file) => (
+          <FilePill
+            key={`${file.name}-${file.lastModified}-${file.size}`}
+            name={file.name}
+            onRemove={() => onRemove(file)}
+            color="accent"
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function sameFile(a: File, b: File): boolean {
+  return a.name === b.name && a.lastModified === b.lastModified && a.size === b.size;
 }
 
 function FilePill({
