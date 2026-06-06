@@ -192,7 +192,7 @@ export const Route = createFileRoute("/")({
 function HomePage() {
   const [authLoading, setAuthLoading] = useState(true);
   const [authUser, setAuthUser] = useState<User | null>(null);
-  const [passwordRecoveryMode, setPasswordRecoveryMode] = useState(false);
+  const [passwordRecoveryMode, setPasswordRecoveryMode] = useState(() => isPasswordRecoveryUrl());
   const [signingOut, setSigningOut] = useState(false);
   const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
   const [activeDeviceCount, setActiveDeviceCount] = useState<number | null>(null);
@@ -287,7 +287,8 @@ function HomePage() {
         toast.error("Unable to check your login session.");
       }
 
-      if (data.session && isPasswordRecoveryUrl()) {
+      const isRecoveryUrl = isPasswordRecoveryUrl();
+      if (isRecoveryUrl) {
         setPasswordRecoveryMode(true);
         setAuthUser(null);
       } else if (data.session) {
@@ -319,7 +320,8 @@ function HomePage() {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === "PASSWORD_RECOVERY" && session) {
+      const isRecoveryUrl = isPasswordRecoveryUrl();
+      if (event === "PASSWORD_RECOVERY" || isRecoveryUrl) {
         setPasswordRecoveryMode(true);
         setAuthUser(null);
         setAuthLoading(false);
@@ -4431,9 +4433,9 @@ function AuthScreen({
         setPassword("");
         setConfirmPassword("");
         onRecoveryComplete();
+        cleanPasswordRecoveryUrl();
         await supabase.auth.signOut();
         setAuthMode("login");
-        cleanPasswordRecoveryUrl();
         return;
       }
 
