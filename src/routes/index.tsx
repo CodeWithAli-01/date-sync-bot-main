@@ -192,6 +192,7 @@ export const Route = createFileRoute("/")({
 function HomePage() {
   const [authLoading, setAuthLoading] = useState(true);
   const [authUser, setAuthUser] = useState<User | null>(null);
+  const [passwordRecoveryMode, setPasswordRecoveryMode] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
   const [activeDeviceCount, setActiveDeviceCount] = useState<number | null>(null);
@@ -286,7 +287,10 @@ function HomePage() {
         toast.error("Unable to check your login session.");
       }
 
-      if (data.session) {
+      if (data.session && isPasswordRecoveryUrl()) {
+        setPasswordRecoveryMode(true);
+        setAuthUser(null);
+      } else if (data.session) {
         try {
           const deviceResult = await enforceDeviceLimit(data.session);
           if (!mounted) return;
@@ -315,6 +319,13 @@ function HomePage() {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "PASSWORD_RECOVERY" && session) {
+        setPasswordRecoveryMode(true);
+        setAuthUser(null);
+        setAuthLoading(false);
+        return;
+      }
+
       if (event === "SIGNED_OUT" || !session) {
         setAuthUser(null);
         setAuthLoading(false);
@@ -1216,6 +1227,8 @@ function HomePage() {
       <AuthScreen
         color={themeColor}
         mode={themeMode}
+        passwordRecoveryMode={passwordRecoveryMode}
+        onRecoveryComplete={() => setPasswordRecoveryMode(false)}
         onChange={updateThemeColor}
         onToggleMode={toggleThemeMode}
       />
@@ -4359,23 +4372,45 @@ function AuthLoadingScreen({
   );
 }
 
+function isPasswordRecoveryUrl(): boolean {
+  if (typeof window === "undefined") return false;
+  const url = new URL(window.location.href);
+  return url.searchParams.get("type") === "recovery" || url.hash.includes("type=recovery");
+}
+
+function cleanPasswordRecoveryUrl() {
+  if (typeof window === "undefined") return;
+  window.history.replaceState(
+    {},
+    document.title,
+    window.location.origin + window.location.pathname,
+  );
+}
+
 function AuthScreen({
   color: _color,
   mode: _mode,
+  passwordRecoveryMode,
+  onRecoveryComplete,
   onChange: _onChange,
   onToggleMode: _onToggleMode,
 }: {
   color: string;
   mode: "light" | "dark";
+  passwordRecoveryMode: boolean;
+  onRecoveryComplete: () => void;
   onChange: (color: string) => void;
   onToggleMode: () => void;
 }) {
-  const [authMode, setAuthMode] = useState<"login" | "signup">("login");
+  const [authMode, setAuthMode] = useState<"login" | "signup" | "forgot">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   const isSignup = authMode === "signup";
+  const isForgot = authMode === "forgot";
+  const isReset = passwordRecoveryMode;
 
   const submitAuth = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -4383,6 +4418,37 @@ function AuthScreen({
 
     try {
       const normalizedEmail = email.trim();
+      if (isReset) {
+        if (!password || password.length < 6) {
+          throw new Error("Enter a new password with at least 6 characters.");
+        }
+        if (password !== confirmPassword) throw new Error("Passwords do not match.");
+
+        const { error } = await supabase.auth.updateUser({ password });
+        if (error) throw error;
+
+        toast.success("Password updated. Please login with your new password.");
+        setPassword("");
+        setConfirmPassword("");
+        onRecoveryComplete();
+        await supabase.auth.signOut();
+        setAuthMode("login");
+        cleanPasswordRecoveryUrl();
+        return;
+      }
+
+      if (isForgot) {
+        if (!normalizedEmail) throw new Error("Enter your email address.");
+        const { error } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
+          redirectTo: window.location.origin,
+        });
+        if (error) throw error;
+
+        toast.success("Password reset email sent. Check your inbox.");
+        setAuthMode("login");
+        return;
+      }
+
       if (!normalizedEmail || !password) throw new Error("Enter your email and password.");
 
       const result = isSignup
@@ -4430,75 +4496,137 @@ function AuthScreen({
             <BrandMark icon={<ShieldCheck className="h-5 w-5" />} />
             <div>
               <h1 className="text-lg font-bold text-foreground sm:text-xl">{APP_NAME}</h1>
-              <p className="text-sm text-muted-foreground">Sign in to continue</p>
+              <p className="text-sm text-muted-foreground">
+                {isReset
+                  ? "Set a new password"
+                  : isForgot
+                    ? "Recover your account"
+                    : "Sign in to continue"}
+              </p>
             </div>
           </div>
 
-          <div className="neuro-inset mb-5 grid grid-cols-2 p-1">
-            <button
-              type="button"
-              onClick={() => setAuthMode("login")}
-              className={`h-9 rounded-md text-sm font-semibold transition ${
-                !isSignup ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"
-              }`}
-            >
-              Login
-            </button>
-            <button
-              type="button"
-              onClick={() => setAuthMode("signup")}
-              className={`h-9 rounded-md text-sm font-semibold transition ${
-                isSignup ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"
-              }`}
-            >
-              Create
-            </button>
-          </div>
+          {!isReset && (
+            <div className="neuro-inset mb-5 grid grid-cols-2 p-1">
+              <button
+                type="button"
+                onClick={() => setAuthMode("login")}
+                className={`h-9 rounded-md text-sm font-semibold transition ${
+                  !isSignup && !isForgot
+                    ? "bg-card text-foreground shadow-sm"
+                    : "text-muted-foreground"
+                }`}
+              >
+                Login
+              </button>
+              <button
+                type="button"
+                onClick={() => setAuthMode("signup")}
+                className={`h-9 rounded-md text-sm font-semibold transition ${
+                  isSignup ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"
+                }`}
+              >
+                Create
+              </button>
+            </div>
+          )}
 
           <form className="space-y-4" onSubmit={submitAuth}>
-            <label className="block text-sm font-medium text-foreground">
-              Email
-              <span className="neuro-inset mt-1 flex items-center gap-2 px-3 py-2">
-                <Mail className="h-4 w-4 shrink-0 text-primary" />
-                <input
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                  type="email"
-                  autoComplete="email"
-                  className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none"
-                  placeholder="you@example.com"
-                  required
-                />
-              </span>
-            </label>
+            {!isReset && (
+              <label className="block text-sm font-medium text-foreground">
+                Email
+                <span className="neuro-inset mt-1 flex items-center gap-2 px-3 py-2">
+                  <Mail className="h-4 w-4 shrink-0 text-primary" />
+                  <input
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                    type="email"
+                    autoComplete="email"
+                    className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none"
+                    placeholder="you@example.com"
+                    required
+                  />
+                </span>
+              </label>
+            )}
 
-            <label className="block text-sm font-medium text-foreground">
-              Password
-              <span className="neuro-inset mt-1 flex items-center gap-2 px-3 py-2">
-                <Lock className="h-4 w-4 shrink-0 text-primary" />
-                <input
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  type="password"
-                  autoComplete={isSignup ? "new-password" : "current-password"}
-                  minLength={6}
-                  className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none"
-                  placeholder="At least 6 characters"
-                  required
-                />
-              </span>
-            </label>
+            {!isForgot && (
+              <label className="block text-sm font-medium text-foreground">
+                {isReset ? "New password" : "Password"}
+                <span className="neuro-inset mt-1 flex items-center gap-2 px-3 py-2">
+                  <Lock className="h-4 w-4 shrink-0 text-primary" />
+                  <input
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    type="password"
+                    autoComplete={isSignup || isReset ? "new-password" : "current-password"}
+                    minLength={6}
+                    className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none"
+                    placeholder="At least 6 characters"
+                    required
+                  />
+                </span>
+              </label>
+            )}
+
+            {isReset && (
+              <label className="block text-sm font-medium text-foreground">
+                Confirm password
+                <span className="neuro-inset mt-1 flex items-center gap-2 px-3 py-2">
+                  <Lock className="h-4 w-4 shrink-0 text-primary" />
+                  <input
+                    value={confirmPassword}
+                    onChange={(event) => setConfirmPassword(event.target.value)}
+                    type="password"
+                    autoComplete="new-password"
+                    minLength={6}
+                    className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none"
+                    placeholder="Repeat new password"
+                    required
+                  />
+                </span>
+              </label>
+            )}
 
             <Button type="submit" className="neuro-button h-11 w-full" disabled={submitting}>
               {submitting ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : isForgot ? (
+                <Mail className="mr-2 h-4 w-4" />
+              ) : isReset ? (
+                <Lock className="mr-2 h-4 w-4" />
               ) : isSignup ? (
                 <UserPlus className="mr-2 h-4 w-4" />
               ) : (
                 <ShieldCheck className="mr-2 h-4 w-4" />
               )}
-              {isSignup ? "Create account" : "Login"}
+              {isReset
+                ? "Update password"
+                : isForgot
+                  ? "Send reset email"
+                  : isSignup
+                    ? "Create account"
+                    : "Login"}
             </Button>
+
+            {!isReset && (
+              <div className="flex flex-col items-center gap-2 text-sm sm:flex-row sm:justify-between">
+                {!isSignup && (
+                  <button
+                    type="button"
+                    onClick={() => setAuthMode(isForgot ? "login" : "forgot")}
+                    className="font-semibold text-primary hover:underline"
+                  >
+                    {isForgot ? "Back to login" : "Forgot password?"}
+                  </button>
+                )}
+                {isForgot && (
+                  <span className="text-center text-xs text-muted-foreground sm:text-right">
+                    We will send a secure reset link to your email.
+                  </span>
+                )}
+              </div>
+            )}
           </form>
         </Card>
       </main>
