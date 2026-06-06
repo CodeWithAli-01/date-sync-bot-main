@@ -55,6 +55,7 @@ export interface BulkDailyReportResult {
 interface CallSummary {
   code: string;
   name: string;
+  teamName: string;
   dates: Set<string>;
   planned: number;
   unplanned: number;
@@ -317,8 +318,16 @@ function processDailySheet(
   if (!columns) throw new Error("Template columns were not found.");
   const outputColumns = callLog.selfieFileCount > 0 ? ensureSelfieColumn(sheet, columns) : columns;
 
-  const summariesByCode = new Map(callLog.summaries.map((item) => [item.code, item]));
-  const unmatched = new Set(callLog.summaries.map((item) => `${item.code} ${item.name}`));
+  const summariesByTeamCode = new Map(
+    callLog.summaries.map((item) => [callSummaryKey(item.teamName, item.code), item]),
+  );
+  const summariesByCode = new Map<string, CallSummary[]>();
+  for (const summary of callLog.summaries) {
+    const summaries = summariesByCode.get(summary.code) ?? [];
+    summaries.push(summary);
+    summariesByCode.set(summary.code, summaries);
+  }
+  const unmatched = new Set(callLog.summaries.map((item) => unmatchedSummaryKey(item)));
   const preview: { name: string; total: number }[] = [];
   const performanceRows: DailyPerformanceRow[] = [];
   let matchedEmployees = 0;
@@ -333,14 +342,17 @@ function processDailySheet(
     if (!code) continue;
     totalEmployees++;
 
-    const match = summariesByCode.get(code);
+    const rowTeamName = outputColumns.teamCol
+      ? cellText(row.getCell(outputColumns.teamCol))
+      : sheet.name;
+    const match = findDailySummaryForRow(code, rowTeamName, summariesByTeamCode, summariesByCode);
     if (!match) {
       clearDailyCells(row, outputColumns);
       continue;
     }
 
     matchedEmployees++;
-    unmatched.delete(`${match.code} ${match.name}`);
+    unmatched.delete(unmatchedSummaryKey(match));
     row.getCell(outputColumns.plannedCol).value = match.planned || 0;
     row.getCell(outputColumns.unplannedCol).value = match.unplanned || 0;
     row.getCell(outputColumns.morningCol).value = match.morning || 0;
@@ -357,7 +369,7 @@ function processDailySheet(
     styleDailyCells(row, outputColumns);
     if (match.total > 0) preview.push({ name: name || match.name, total: match.total });
     performanceRows.push({
-      teamName: outputColumns.teamCol ? cellText(row.getCell(outputColumns.teamCol)) : sheet.name,
+      teamName: rowTeamName || match.teamName || sheet.name,
       employeeCode: code,
       name: name || match.name,
       designation: outputColumns.designationCol
@@ -436,6 +448,36 @@ function filterTeamSourcesByCallLogTeams(
   return matchingSources.length ? matchingSources : teamSources;
 }
 
+function callSummaryKey(teamName: string, code: string): string {
+  const team = teamKey(teamName);
+  return team ? `${team}|${code}` : code;
+}
+
+function unmatchedSummaryKey(summary: CallSummary): string {
+  return `${callSummaryKey(summary.teamName, summary.code)}|${summary.name}`;
+}
+
+function findDailySummaryForRow(
+  code: string,
+  teamName: string,
+  summariesByTeamCode: Map<string, CallSummary>,
+  summariesByCode: Map<string, CallSummary[]>,
+): CallSummary | undefined {
+  const teamKeyValue = teamKey(teamName);
+  if (teamKeyValue) {
+    const direct = summariesByTeamCode.get(callSummaryKey(teamName, code));
+    if (direct) return direct;
+
+    const teamMatch = (summariesByCode.get(code) ?? []).find((summary) =>
+      teamNamesMatch(summary.teamName, teamName),
+    );
+    if (teamMatch) return teamMatch;
+  }
+
+  const codeMatches = summariesByCode.get(code) ?? [];
+  return codeMatches.length === 1 ? codeMatches[0] : undefined;
+}
+
 function selectDailyTemplateSheet(
   workbook: ExcelJS.Workbook,
   callLog: Awaited<ReturnType<typeof readCallLogs>>,
@@ -512,7 +554,7 @@ async function readCallLog(file: File): Promise<{
   const shiftCol = findHeader(headers, CALL_HEADER_HINTS.shift);
   const teamCol = findHeader(headers, CALL_HEADER_HINTS.team, false);
 
-  const byCode = new Map<string, CallSummary>();
+  const byKey = new Map<string, CallSummary>();
   const teamNames = new Map<string, string>();
   let callRows = 0;
   let faceToFaceRows = 0;
@@ -535,11 +577,13 @@ async function readCallLog(file: File): Promise<{
 
     if (teamName) teamNames.set(teamKey(teamName), teamName);
 
-    let summary = byCode.get(code);
+    const summaryKey = callSummaryKey(teamName, code);
+    let summary = byKey.get(summaryKey);
     if (!summary) {
       summary = {
         code,
         name,
+        teamName,
         dates: new Set<string>(),
         planned: 0,
         unplanned: 0,
@@ -549,7 +593,7 @@ async function readCallLog(file: File): Promise<{
         cpTime: "",
         selfies: 0,
       };
-      byCode.set(code, summary);
+      byKey.set(summaryKey, summary);
     }
 
     callRows++;
@@ -573,7 +617,7 @@ async function readCallLog(file: File): Promise<{
   }
 
   return {
-    summaries: [...byCode.values()],
+    summaries: [...byKey.values()],
     callRows,
     faceToFaceRows,
     contactPointRows,
@@ -595,7 +639,7 @@ async function readCallLogs(files: File | File[]): Promise<{
   const fileList = Array.isArray(files) ? files : [files];
   if (!fileList.length) throw new Error("Please upload at least one call log Excel file.");
 
-  const mergedByCode = new Map<string, CallSummary>();
+  const mergedByKey = new Map<string, CallSummary>();
   const teamNames = new Map<string, string>();
   let callRows = 0;
   let faceToFaceRows = 0;
@@ -612,9 +656,10 @@ async function readCallLogs(files: File | File[]): Promise<{
     }
 
     for (const summary of callLog.summaries) {
-      const existing = mergedByCode.get(summary.code);
+      const key = callSummaryKey(summary.teamName, summary.code);
+      const existing = mergedByKey.get(key);
       if (!existing) {
-        mergedByCode.set(summary.code, {
+        mergedByKey.set(key, {
           ...summary,
           dates: new Set(summary.dates),
         });
@@ -632,7 +677,7 @@ async function readCallLogs(files: File | File[]): Promise<{
   }
 
   return {
-    summaries: [...mergedByCode.values()],
+    summaries: [...mergedByKey.values()],
     callRows,
     faceToFaceRows,
     contactPointRows,
