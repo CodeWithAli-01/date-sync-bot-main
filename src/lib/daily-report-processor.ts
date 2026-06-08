@@ -449,7 +449,7 @@ function processDailySheet(
       : sheet.name;
     const match = findDailySummaryForRow(code, rowTeamName, summariesByTeamCode, summariesByCode);
     if (!match) {
-      clearDailyCells(row, outputColumns);
+      writeUnmatchedDailyDefaults(row, outputColumns);
       continue;
     }
 
@@ -1439,6 +1439,31 @@ function findHeader(headers: Map<string, number>, hints: string[], required = tr
   }
   if (!required) return 0;
   throw new Error(`Required column not found: ${hints[0]}`);
+}
+
+function writeUnmatchedDailyDefaults(row: ExcelJS.Row, columns: DailyColumns) {
+  for (const col of [
+    columns.plannedCol,
+    columns.unplannedCol,
+    columns.morningCol,
+    columns.eveningCol,
+    columns.totalCol,
+  ]) {
+    row.getCell(col).value = 0;
+  }
+
+  row.getCell(columns.cpCol).value = null;
+  if (columns.remarksCol) {
+    const remarksCell = row.getCell(columns.remarksCol);
+    remarksCell.value = null;
+    styleRemarksCell(remarksCell);
+  }
+  if (columns.selfieCol) {
+    const selfieCell = row.getCell(columns.selfieCol);
+    selfieCell.value = null;
+    applyIsolatedSelfieStyle(selfieCell, undefined);
+  }
+  styleDailyCells(row, columns);
 }
 
 function clearDailyCells(row: ExcelJS.Row, columns: DailyColumns) {
