@@ -522,6 +522,13 @@ function columnLetter(col: number): string {
   return letter;
 }
 
+function writeDateTitleCell(row: ExcelJS.Row, col: number, date: string) {
+  const cell = row.getCell(col);
+  cell.value = new Date(`${date}T00:00:00`);
+  cell.numFmt = "d-mmm";
+  cell.alignment = { ...(cell.alignment ?? {}), horizontal: "center", vertical: "middle" };
+}
+
 function findDatePairColumns(
   ws: ExcelJS.Worksheet,
   headerRow: number,
@@ -531,9 +538,43 @@ function findDatePairColumns(
   const dateHeader = ws.getRow(Math.max(1, headerRow - 1));
   const pairs = new Map<string, DatePairCols>();
   const lastUsed = findLastUsedColumn(ws);
+  const scanLimit = Math.max(lastUsed, header.cellCount || 0);
+  const existingDateBlocks: DatePairCols[] = [];
+
+  for (let c = 1; c <= scanLimit; c++) {
+    const labels = new Map<string, number>();
+    for (let offset = 0; offset < 5; offset++) {
+      const label = normalize(cellText(header.getCell(c + offset)));
+      if (label) labels.set(label, c + offset);
+    }
+    const plannedCol = labels.get("planned");
+    const unplannedCol = labels.get("unplanned");
+    const callsCol = labels.get("calls");
+    const selfiesCol = labels.get("selfies");
+    if (!plannedCol || !unplannedCol || !callsCol || !selfiesCol) continue;
+
+    const titleCol = Math.min(plannedCol, unplannedCol, callsCol, selfiesCol);
+    if (!cellDateKey(dateHeader.getCell(titleCol))) continue;
+    existingDateBlocks.push({
+      plannedCol,
+      unplannedCol,
+      callsCol,
+      selfiesCol,
+      totalCol: callsCol,
+    });
+    c = Math.max(c, selfiesCol);
+  }
+
+  for (const [index, date] of dates.entries()) {
+    const block = existingDateBlocks[index];
+    if (!block) break;
+    writeDateTitleCell(dateHeader, block.plannedCol ?? block.selfiesCol, date);
+    pairs.set(date, block);
+  }
 
   for (const date of dates) {
-    for (let c = 1; c <= Math.max(lastUsed, header.cellCount || 0); c++) {
+    if (pairs.has(date)) continue;
+    for (let c = 1; c <= scanLimit; c++) {
       if (cellDateKey(dateHeader.getCell(c)) !== date) continue;
       const labels = new Map<string, number>();
       for (let offset = 0; offset < 5; offset++) {
@@ -544,25 +585,26 @@ function findDatePairColumns(
       const unplannedCol = labels.get("unplanned");
       const callsCol = labels.get("calls");
       const selfiesCol = labels.get("selfies");
-      if (plannedCol && unplannedCol && callsCol && selfiesCol) {
-        pairs.set(date, {
-          plannedCol,
-          unplannedCol,
-          callsCol,
-          selfiesCol,
-          totalCol: callsCol,
-        });
-        break;
-      }
+      if (!plannedCol || !unplannedCol || !callsCol || !selfiesCol) continue;
+      writeDateTitleCell(dateHeader, plannedCol, date);
+      pairs.set(date, {
+        plannedCol,
+        unplannedCol,
+        callsCol,
+        selfiesCol,
+        totalCol: callsCol,
+      });
+      break;
     }
   }
 
   for (const date of dates) {
     if (pairs.has(date)) continue;
     const selfieHeader = `${dateLabel(date)} Selfies`.toLowerCase();
-    for (let c = 1; c <= Math.max(lastUsed, header.cellCount || 0); c++) {
+    for (let c = 1; c <= scanLimit; c++) {
       if (normalize(cellText(header.getCell(c))) !== selfieHeader) continue;
       const totalCol = c + 1;
+      writeDateTitleCell(dateHeader, c, date);
       header.getCell(totalCol).value = "Total";
       pairs.set(date, { selfiesCol: c, totalCol });
       break;
@@ -577,8 +619,7 @@ function findDatePairColumns(
     const totalCol = nextCol + 2;
     const selfiesCol = nextCol + 3;
     const dateCell = dateHeader.getCell(plannedCol);
-    dateCell.value = new Date(`${date}T00:00:00`);
-    dateCell.numFmt = "d-mmm";
+    writeDateTitleCell(dateHeader, plannedCol, date);
     styleHeader(dateCell);
     header.getCell(plannedCol).value = "Planned";
     header.getCell(unplannedCol).value = "Unplanned";
@@ -1372,6 +1413,7 @@ export async function processExcel(
     }
     return { ...employee, idx, total };
   });
+  const performanceRows = buildMonthlyReportPerformanceRows(ws.name, empTotals, matchByEmp, dates);
 
   for (const emp of empTotals) {
     const row = ws.getRow(emp.row);
