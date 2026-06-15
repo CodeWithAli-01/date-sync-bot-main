@@ -228,6 +228,12 @@ interface UnmatchedPdfRow {
   row: PdfParseResult["rows"][number];
 }
 
+function sortPdfResultsByDate(pdfResults: PdfParseResult[]): PdfParseResult[] {
+  return [...pdfResults].sort(
+    (a, b) => a.date.localeCompare(b.date) || a.fileName.localeCompare(b.fileName),
+  );
+}
+
 function cellText(cell: ExcelJS.Cell): string {
   const value = cell.value;
   if (value == null) return "";
@@ -243,9 +249,14 @@ function cellText(cell: ExcelJS.Cell): string {
   return String(value);
 }
 
-function cellDateKey(cell: ExcelJS.Cell): string | null {
+function cellDateKey(cell: ExcelJS.Cell, defaultYear?: string): string | null {
   const value = cell.value;
-  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  if (value instanceof Date) {
+    const year = value.getFullYear();
+    const month = String(value.getMonth() + 1).padStart(2, "0");
+    const day = String(value.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
   const text = cellText(cell).trim();
   const iso = text.match(/\b(\d{4}-\d{2}-\d{2})\b/);
   if (iso) return iso[1];
@@ -268,7 +279,7 @@ function cellDateKey(cell: ExcelJS.Cell): string | null {
     dec: "12",
   };
   const month = months[short[2].slice(0, 3).toLowerCase()];
-  const year = new Date().getFullYear();
+  const year = defaultYear ?? "0000";
   return month ? `${year}-${month}-${short[1].padStart(2, "0")}` : null;
 }
 
@@ -506,9 +517,22 @@ function findLastUsedColumn(ws: ExcelJS.Worksheet): number {
 }
 
 function dateLabel(date: string): string {
-  const parsed = new Date(`${date}T00:00:00`);
-  const month = parsed.toLocaleString("en-US", { month: "short" });
-  return `${parsed.getDate()}-${month}`;
+  const [, month, day] = date.split("-");
+  const months: Record<string, string> = {
+    "01": "Jan",
+    "02": "Feb",
+    "03": "Mar",
+    "04": "Apr",
+    "05": "May",
+    "06": "Jun",
+    "07": "Jul",
+    "08": "Aug",
+    "09": "Sep",
+    "10": "Oct",
+    "11": "Nov",
+    "12": "Dec",
+  };
+  return `${Number(day)}-${months[month] ?? month}`;
 }
 
 function columnLetter(col: number): string {
@@ -524,8 +548,8 @@ function columnLetter(col: number): string {
 
 function writeDateTitleCell(row: ExcelJS.Row, col: number, date: string) {
   const cell = row.getCell(col);
-  cell.value = new Date(`${date}T00:00:00`);
-  cell.numFmt = "d-mmm";
+  cell.value = dateLabel(date);
+  cell.numFmt = undefined;
   cell.alignment = { ...(cell.alignment ?? {}), horizontal: "center", vertical: "middle" };
 }
 
@@ -575,7 +599,7 @@ function findDatePairColumns(
   for (const date of dates) {
     if (pairs.has(date)) continue;
     for (let c = 1; c <= scanLimit; c++) {
-      if (cellDateKey(dateHeader.getCell(c)) !== date) continue;
+      if (cellDateKey(dateHeader.getCell(c), date.slice(0, 4)) !== date) continue;
       const labels = new Map<string, number>();
       for (let offset = 0; offset < 5; offset++) {
         const label = normalize(cellText(header.getCell(c + offset)));
@@ -1174,6 +1198,7 @@ async function processExcelMultiSheet(
   wb: ExcelJS.Workbook,
   detections: DetectedSheet[],
 ): Promise<ProcessReport> {
+  const pdfResults = sortPdfResultsByDate(options.pdfResults);
   const states = detections
     .map((det) => {
       const employees = readEmployees(det.ws, det);
@@ -1187,9 +1212,9 @@ async function processExcelMultiSheet(
     );
   }
 
-  const dates = [...new Set(options.pdfResults.map((r) => r.date))].sort();
+  const dates = [...new Set(pdfResults.map((r) => r.date))];
   const days = dates.map((date) => Number(date.slice(8, 10)));
-  const assigned = assignPdfsToReportSheets(states, options.pdfResults);
+  const assigned = assignPdfsToReportSheets(states, pdfResults);
   const warnings: string[] = [];
   const unmatchedNames = new Set<string>();
   const preview: { name: string; total: number }[] = [];
@@ -1219,7 +1244,7 @@ async function processExcelMultiSheet(
     performanceRows.push(...result.performanceRows);
   }
 
-  addPdfAuditSheet(wb, options.pdfResults, (row) => {
+  addPdfAuditSheet(wb, pdfResults, (row) => {
     for (const state of states) {
       const idx = state.matcher.findEmployee(row, false);
       if (idx >= 0) return state.employees[idx];
@@ -1238,8 +1263,8 @@ async function processExcelMultiSheet(
     unmatchedNames: [...unmatchedNames],
     warnings,
     debug: {
-      totalPdfsUploaded: options.pdfResults.length,
-      totalEmployeesDetected: options.pdfResults.reduce((sum, pdf) => sum + pdf.rows.length, 0),
+      totalPdfsUploaded: pdfResults.length,
+      totalEmployeesDetected: pdfResults.reduce((sum, pdf) => sum + pdf.rows.length, 0),
       totalMatched: totalMatchedRows,
       totalSkipped,
       totalRecordsInsertedUpdated: 0,
@@ -1259,12 +1284,13 @@ export async function processExcel(
   excelFile: File,
   options: ProcessOptions,
 ): Promise<ProcessReport> {
+  const pdfResults = sortPdfResultsByDate(options.pdfResults);
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(await excelFile.arrayBuffer());
 
   const reportSheets = detectReportSheets(wb);
   if (reportSheets.length > 1) {
-    return processExcelMultiSheet(excelFile, options, wb, reportSheets);
+    return processExcelMultiSheet(excelFile, { ...options, pdfResults }, wb, reportSheets);
   }
 
   const det = detectActiveSheet(wb);
@@ -1277,7 +1303,7 @@ export async function processExcel(
     );
   }
 
-  const dates = [...new Set(options.pdfResults.map((r) => r.date))].sort();
+  const dates = [...new Set(pdfResults.map((r) => r.date))];
   const days = dates.map((date) => Number(date.slice(8, 10)));
   const warnings: string[] = [];
 
@@ -1364,7 +1390,7 @@ export async function processExcel(
     return findEmployeeByUniqueName(row.name);
   }
 
-  for (const pdf of options.pdfResults) {
+  for (const pdf of pdfResults) {
     if (pdf.rows.length < employees.length) {
       warnings.push(
         `PDF parsing incomplete, please review. ${pdf.fileName}: ${pdf.rows.length}/${employees.length} rows extracted.`,
@@ -1467,7 +1493,7 @@ export async function processExcel(
     det.dataStartRow,
     Math.max(finalDataEndRow, det.dataEndRow, ws.rowCount),
   );
-  addPdfAuditSheet(wb, options.pdfResults, (row) => {
+  addPdfAuditSheet(wb, pdfResults, (row) => {
     const idx = findEmployee(row, false);
     return idx >= 0 ? employees[idx] : null;
   });
@@ -1508,7 +1534,7 @@ export async function processExcel(
 
   console.info("[Excel matcher]", {
     totalEmployees: employees.length,
-    extractedRows: options.pdfResults.reduce((sum, pdf) => sum + pdf.rows.length, 0),
+    extractedRows: pdfResults.reduce((sum, pdf) => sum + pdf.rows.length, 0),
     matchedEmployees: matchByEmp.size,
     skippedRows: unmatched.size,
     unmatchedRows: [...unmatched],
@@ -1521,8 +1547,8 @@ export async function processExcel(
     unmatchedNames: [...unmatched],
     warnings,
     debug: {
-      totalPdfsUploaded: options.pdfResults.length,
-      totalEmployeesDetected: options.pdfResults.reduce((sum, pdf) => sum + pdf.rows.length, 0),
+      totalPdfsUploaded: pdfResults.length,
+      totalEmployeesDetected: pdfResults.reduce((sum, pdf) => sum + pdf.rows.length, 0),
       totalMatched: matchByEmp.size,
       totalSkipped: unmatched.size,
       totalRecordsInsertedUpdated: 0,

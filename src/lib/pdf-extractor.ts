@@ -76,101 +76,6 @@ function extractDateFromFilename(fileName: string): string | null {
   return month ? `${named[3]}-${month}-${day}` : null;
 }
 
-const MONTHS: Record<string, string> = {
-  jan: "01",
-  feb: "02",
-  mar: "03",
-  apr: "04",
-  may: "05",
-  jun: "06",
-  jul: "07",
-  aug: "08",
-  sep: "09",
-  oct: "10",
-  nov: "11",
-  dec: "12",
-};
-
-function toIsoDate(
-  year: string | number,
-  month: string | number,
-  day: string | number,
-): string | null {
-  const y = Number(year);
-  const m = Number(month);
-  const d = Number(day);
-  if (!Number.isInteger(y) || !Number.isInteger(m) || !Number.isInteger(d)) return null;
-  if (y < 2000 || y > 2100 || m < 1 || m > 12 || d < 1 || d > 31) return null;
-  const date = new Date(Date.UTC(y, m - 1, d));
-  if (date.getUTCFullYear() !== y || date.getUTCMonth() !== m - 1 || date.getUTCDate() !== d) {
-    return null;
-  }
-  return `${String(y).padStart(4, "0")}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-}
-
-function extractDateFromPdfText(
-  text: string,
-  defaultYear = new Date().getFullYear(),
-): string | null {
-  const compact = text.replace(/\s+/g, " ").trim();
-  const firstPageText = compact.slice(0, 4000);
-  const labelled = firstPageText.match(
-    /\b(?:report\s+date|date)\s*[:-]?\s*(\d{1,2})(?:st|nd|rd|th)?\s*(?:-|\/|\.|\s)\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s*(?:-|\/|,|\s)?\s*(20\d{2})\b/i,
-  );
-  if (labelled) {
-    const month = MONTHS[labelled[2].slice(0, 3).toLowerCase()];
-    const iso = month ? toIsoDate(labelled[3], month, labelled[1]) : null;
-    if (iso) return iso;
-  }
-
-  const labelledNumeric = firstPageText.match(
-    /\b(?:report\s+date|date)\s*[:-]?\s*(\d{1,2})[/.-](\d{1,2})[/.-](20\d{2})\b/i,
-  );
-  if (labelledNumeric) {
-    const iso = toIsoDate(labelledNumeric[3], labelledNumeric[2], labelledNumeric[1]);
-    if (iso) return iso;
-  }
-
-  const labelledShort = firstPageText.match(
-    /\b(?:report\s+date|date)\s*[:-]?\s*(\d{1,2})(?:st|nd|rd|th)?\s*(?:-|\/|\.|\s)\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b/i,
-  );
-  if (labelledShort) {
-    const month = MONTHS[labelledShort[2].slice(0, 3).toLowerCase()];
-    const iso = month ? toIsoDate(defaultYear, month, labelledShort[1]) : null;
-    if (iso) return iso;
-  }
-
-  const named = firstPageText.match(
-    /\b(\d{1,2})(?:st|nd|rd|th)?\s*(?:-|\/|\.|\s)\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s*(?:-|\/|,|\s)?\s*(20\d{2})\b/i,
-  );
-  if (named) {
-    const month = MONTHS[named[2].slice(0, 3).toLowerCase()];
-    const iso = month ? toIsoDate(named[3], month, named[1]) : null;
-    if (iso) return iso;
-  }
-
-  const monthFirst = firstPageText.match(
-    /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+(\d{1,2})(?:st|nd|rd|th)?(?:,|\s)+\s*(20\d{2})\b/i,
-  );
-  if (monthFirst) {
-    const month = MONTHS[monthFirst[1].slice(0, 3).toLowerCase()];
-    const iso = month ? toIsoDate(monthFirst[3], month, monthFirst[2]) : null;
-    if (iso) return iso;
-  }
-
-  const namedShort = firstPageText.match(
-    /\b(\d{1,2})(?:st|nd|rd|th)?\s*(?:-|\/|\.|\s)\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b/i,
-  );
-  if (namedShort) {
-    const month = MONTHS[namedShort[2].slice(0, 3).toLowerCase()];
-    const iso = month ? toIsoDate(defaultYear, month, namedShort[1]) : null;
-    if (iso) return iso;
-  }
-
-  const numeric = firstPageText.match(/\b(\d{1,2})[/.-](\d{1,2})[/.-](20\d{2})\b/);
-  return numeric ? toIsoDate(numeric[3], numeric[2], numeric[1]) : null;
-}
-
 function extractSelfieCount(text: string): number | null {
   const lower = text.toLowerCase();
   const selfie = lower.match(/(\d+)\s*selfies?\b/);
@@ -395,6 +300,9 @@ async function loadPdfJs(): Promise<PdfJs> {
 
 export async function parsePdf(file: File): Promise<PdfParseResult> {
   const filenameDate = extractDateFromFilename(file.name);
+  if (!filenameDate) {
+    throw new Error(`Filename "${file.name}" must contain a YYYY-MM-DD or day-month-year date.`);
+  }
 
   const buf = await file.arrayBuffer();
   const fileHash = await sha256Hex(buf);
@@ -427,13 +335,7 @@ export async function parsePdf(file: File): Promise<PdfParseResult> {
     }
   }
 
-  const fallbackYear = filenameDate ? Number(filenameDate.slice(0, 4)) : undefined;
-  const date = extractDateFromPdfText(rawText, fallbackYear) ?? filenameDate;
-  if (!date) {
-    throw new Error(
-      `Unable to detect a report date inside "${file.name}". Add a date to the PDF title/content or filename.`,
-    );
-  }
+  const date = filenameDate;
   const day = parseInt(date.slice(8, 10), 10);
   const totalX = totalHeaderXs.length
     ? totalHeaderXs.reduce((sum, x) => sum + x, 0) / totalHeaderXs.length
@@ -480,7 +382,6 @@ export async function parsePdf(file: File): Promise<PdfParseResult> {
   console.info("[PDF parser]", {
     fileName: file.name,
     filenameDate,
-    reportDate: date,
     totalPages: pdf.numPages,
     totalRowsDetected: detectedRows.length,
     parsedRows: rows.length,
