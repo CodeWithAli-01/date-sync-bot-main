@@ -39,6 +39,7 @@ import {
   Info,
   Brush,
   MonitorSmartphone,
+  Search,
 } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
 import { Button } from "@/components/ui/button";
@@ -50,6 +51,7 @@ import { Slider } from "@/components/ui/slider";
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
 import { supabase } from "@/integrations/supabase/client";
+import type { Tables } from "@/integrations/supabase/types";
 import { parsePdf, type PdfParseResult } from "@/lib/pdf-extractor";
 import { processExcel, type ProcessReport } from "@/lib/excel-processor";
 import {
@@ -66,6 +68,17 @@ import {
   processMonthlyPlannedReport,
   type MonthlyPlannedResult,
 } from "@/lib/monthly-planned-processor";
+import {
+  BUILT_IN_DISTRIBUTOR_PROFILES,
+  DISTRIBUTOR_SALES_COLUMNS,
+  DISTRIBUTOR_NUMERIC_COLUMNS,
+  exportDistributorSalesExcel,
+  processDistributorSalesPdfs,
+  type DistributorFormatProfile,
+  type DistributorNumericColumnKey,
+  type DistributorSalesResult,
+  type DistributorSalesRow,
+} from "@/lib/distributor-sales-processor";
 import {
   syncToDatabase,
   syncGeneratedReportToDatabase,
@@ -102,6 +115,7 @@ type ActiveModule =
   | "daily-report"
   | "doctor-coverage"
   | "monthly-planned"
+  | "distributor-sales"
   | "history"
   | "profile"
   | null;
@@ -162,6 +176,9 @@ const DASHBOARD_LINES = [
 ];
 
 const DEFAULT_THEME_COLOR = "#0b6f6a";
+const DISTRIBUTOR_PROFILE_STORAGE_KEY = "distributor-sales-format-profiles";
+const DISTRIBUTOR_SAMPLE_BUCKET = "distributor-format-samples";
+const DISTRIBUTOR_PROFILE_STORAGE_FOLDER = "profiles";
 const THEME_COLORS = [
   "#0b6f6a",
   "#0f766e",
@@ -173,6 +190,68 @@ const THEME_COLORS = [
   "#ca8a04",
   "#16a34a",
   "#111827",
+];
+
+const MANUAL_DISTRIBUTOR_MAPPING_FIELDS = [
+  "Distributor Name",
+  "Product Code",
+  "Product Name",
+  "Trade Price",
+  "Open Stock",
+  "Receipt Qty",
+  "Receipt Bns",
+  "Total Stock",
+  "Sales Qty",
+  "Sales Bns",
+  "Return Qty",
+  "Return Bns",
+  "Net Sale Qty",
+  "Net Sale Bns",
+  "Sale Value",
+  "Transfer In",
+  "Transfer Out",
+  "Closing Stock",
+  "Stock Value",
+  "Today Sale",
+  "Previous Month",
+  "Variance Qty",
+  "Variance %",
+  "Group Name",
+  "Group Total",
+  "From Date",
+  "To Date",
+];
+
+const MANUAL_DISTRIBUTOR_HEADER_OPTIONS = [
+  "",
+  "Code",
+  "Product Code",
+  "Item Code",
+  "Description",
+  "Product Name",
+  "Item Name",
+  "Trade Price",
+  "T.P.",
+  "Rate",
+  "Open Stock",
+  "Opening Balance",
+  "Receipt Qty",
+  "Purchase",
+  "Bns",
+  "Total Stock",
+  "Sales Qty",
+  "Return Qty",
+  "Net Sale",
+  "Sale Value",
+  "Closing Stock",
+  "Stock Value",
+  "Today Sale",
+  "Previous Month",
+  "Variance",
+  "Group",
+  "Group Total",
+  "From Date",
+  "To Date",
 ];
 
 export const Route = createFileRoute("/")({
@@ -241,6 +320,39 @@ function HomePage() {
   );
   const [monthlyPlannedPreview, setMonthlyPlannedPreview] = useState<SheetPreview | null>(null);
   const [monthlyPlannedPreviewLoading, setMonthlyPlannedPreviewLoading] = useState(false);
+  const [distributorFiles, setDistributorFiles] = useState<File[]>([]);
+  const [distributorProcessing, setDistributorProcessing] = useState(false);
+  const [distributorResult, setDistributorResult] = useState<DistributorSalesResult | null>(null);
+  const [distributorExporting, setDistributorExporting] = useState(false);
+  const [distributorGeneratedFile, setDistributorGeneratedFile] = useState<{
+    blob: Blob;
+    url: string;
+    fileName: string;
+  } | null>(null);
+  const [distributorReportPreviewOpen, setDistributorReportPreviewOpen] = useState(false);
+  const [distributorSampleMappingOpen, setDistributorSampleMappingOpen] = useState(false);
+  const [distributorProfiles, setDistributorProfiles] = useState<DistributorFormatProfile[]>(() =>
+    readDistributorProfiles(),
+  );
+  const [distributorProfileSearch, setDistributorProfileSearch] = useState("");
+  const [selectedDistributorProfile, setSelectedDistributorProfile] =
+    useState<DistributorFormatProfile | null>(null);
+  const [distributorProfileDialogMode, setDistributorProfileDialogMode] = useState<
+    "view" | "edit" | "add" | null
+  >(null);
+  const [distributorFormatPanel, setDistributorFormatPanel] = useState<"add" | "search" | null>(
+    null,
+  );
+  const [distributorLargePanelMode, setDistributorLargePanelMode] = useState<
+    "add" | "search" | "view" | "edit" | null
+  >(null);
+  const [distributorAddSourceType, setDistributorAddSourceType] = useState<
+    "PDF" | "Excel" | "Screenshot" | null
+  >(null);
+  const [distributorSampleFormatName, setDistributorSampleFormatName] = useState("");
+  const [distributorSampleFormatFile, setDistributorSampleFormatFile] = useState<File | null>(null);
+  const [distributorManualDraft, setDistributorManualDraft] =
+    useState<DistributorFormatProfile | null>(null);
   const [performanceDialogOpen, setPerformanceDialogOpen] = useState(false);
   const [performanceDialogMode, setPerformanceDialogMode] = useState<"options" | "view">("options");
 
@@ -257,6 +369,53 @@ function HomePage() {
   const monthlyPlannedCallLogInputRef = useRef<HTMLInputElement>(null);
   const monthlyPlannedTemplateInputRef = useRef<HTMLInputElement>(null);
   const monthlyPlannedPreviewRef = useRef<HTMLDivElement>(null);
+  const distributorInputRef = useRef<HTMLInputElement>(null);
+
+  const allDistributorProfiles = useMemo(() => {
+    const inactiveNames = new Set(
+      distributorProfiles
+        .filter((profile) => profile.active === false)
+        .map((profile) => profile.distributorName.trim().toLowerCase()),
+    );
+    const savedActiveNames = new Set(
+      distributorProfiles
+        .filter((profile) => profile.active !== false)
+        .map((profile) => profile.distributorName.trim().toLowerCase()),
+    );
+    return [
+      ...BUILT_IN_DISTRIBUTOR_PROFILES.filter(
+        (profile) =>
+          !inactiveNames.has(profile.distributorName.trim().toLowerCase()) &&
+          !savedActiveNames.has(profile.distributorName.trim().toLowerCase()),
+      ),
+      ...distributorProfiles.filter((profile) => profile.active !== false),
+    ];
+  }, [distributorProfiles]);
+  const visibleDistributorProfiles = useMemo(() => {
+    const query = distributorProfileSearch.trim().toLowerCase();
+    return allDistributorProfiles.filter((profile) => {
+      const source = profile.sourceSampleType ?? "Manual";
+      const haystack = `${profile.distributorName} ${profile.profileName} ${source}`.toLowerCase();
+      return query ? haystack.includes(query) : true;
+    });
+  }, [allDistributorProfiles, distributorProfileSearch]);
+  const clearDistributorGeneratedFile = useCallback(() => {
+    setDistributorGeneratedFile((current) => {
+      if (current) URL.revokeObjectURL(current.url);
+      return null;
+    });
+  }, []);
+  const replaceDistributorGeneratedFile = useCallback((blob: Blob) => {
+    const nextFile = {
+      blob,
+      url: URL.createObjectURL(blob),
+      fileName: "Distributor_Sales_Report.xlsx",
+    };
+    setDistributorGeneratedFile((current) => {
+      if (current) URL.revokeObjectURL(current.url);
+      return nextFile;
+    });
+  }, []);
 
   useEffect(() => {
     const key = "dashboard-line-index";
@@ -265,6 +424,13 @@ function HomePage() {
     window.localStorage.setItem(key, String(next));
     setDashboardLine(DASHBOARD_LINES[next]);
   }, []);
+
+  useEffect(
+    () => () => {
+      if (distributorGeneratedFile) URL.revokeObjectURL(distributorGeneratedFile.url);
+    },
+    [distributorGeneratedFile],
+  );
 
   useEffect(() => {
     const saved = window.localStorage.getItem("site-theme-color") || DEFAULT_THEME_COLOR;
@@ -373,6 +539,35 @@ function HomePage() {
     void syncAuthUserToDatabase(authUser).catch((error) => {
       console.warn("Auth user database sync failed", error);
     });
+  }, [authUser]);
+
+  useEffect(() => {
+    if (!authUser) {
+      setDistributorProfiles(readDistributorProfiles());
+      return;
+    }
+
+    let cancelled = false;
+    void loadDistributorProfilesFromDatabase()
+      .then((profiles) => {
+        if (cancelled) return;
+        setDistributorProfiles(profiles);
+        writeDistributorProfiles(profiles);
+      })
+      .catch((error) => {
+        console.warn("Distributor format profile load failed", error);
+        if (!cancelled) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (!/distributor_format_profiles|schema cache|relation/i.test(message)) {
+            toast.error("Saved distributor formats could not be loaded. Using local cache.");
+          }
+          setDistributorProfiles(readDistributorProfiles());
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [authUser]);
 
   useEffect(() => {
@@ -1104,6 +1299,533 @@ function HomePage() {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  };
+
+  const processDistributorSales = async () => {
+    if (!distributorFiles.length) {
+      toast.error("Please upload distributor sales PDF file(s).");
+      return;
+    }
+    setDistributorProcessing(true);
+    setDistributorResult(null);
+    clearDistributorGeneratedFile();
+    setDistributorReportPreviewOpen(false);
+    setDistributorSampleMappingOpen(false);
+    try {
+      const result = await processDistributorSalesPdfs(distributorFiles, {
+        profiles: distributorProfiles,
+      });
+      if (!result.rows.length) {
+        setDistributorResult(result);
+        if (result.warnings.length) toast.warning(result.warnings[0]);
+        toast.error("No distributor rows were generated. Please review the PDF or mapping.");
+        return;
+      }
+      const blob = await exportDistributorSalesExcel(result.rows);
+      replaceDistributorGeneratedFile(blob);
+      setDistributorResult(result);
+      if (result.warnings.length) toast.warning(result.warnings[0]);
+      toast.success(
+        `Distributor report ready. ${result.rows.filter((row) => row.rowType === "product").length} product row(s) extracted.`,
+      );
+    } catch (error) {
+      console.error("Distributor sales processing failed", error);
+      clearDistributorGeneratedFile();
+      toast.error(error instanceof Error ? error.message : "Unable to process distributor PDFs.");
+    } finally {
+      setDistributorProcessing(false);
+    }
+  };
+
+  const saveDistributorMappings = () => {
+    if (!distributorResult?.summaries.length) {
+      toast.error("Generate a distributor preview before saving a mapping.");
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const nextProfiles = [...distributorProfiles];
+    let savedCount = 0;
+
+    for (const summary of distributorResult.summaries) {
+      if (!summary.distributorName) continue;
+      const numericOrder = sanitizeDistributorNumericOrder(summary.suggestedNumericOrder);
+      const profile: DistributorFormatProfile = {
+        distributorName: summary.distributorName,
+        profileName: `${summary.distributorName} mapping`,
+        sourceSampleType: "PDF",
+        sourceSampleName: summary.fileName,
+        numericOrder,
+        sourceHeaders: summary.sourceHeaders,
+        sourceColumnPositions: {},
+        headerRowRule: "Auto-detected from PDF header aliases and saved for this distributor.",
+        productRowRule:
+          "Product code is separated first; product name remains complete until numeric values start.",
+        groupHeadingRule: "Detect group headings from group labels or uppercase section headings.",
+        groupTotalRule: "Read PDF Group Total rows, otherwise calculate from extracted products.",
+        dateExtractionRule:
+          "Read From Date and To Date from the PDF header when confidently found.",
+        distributorNameExtractionRule: "Detected from PDF text or source file name.",
+        columnMappingRules: numericOrder.map((key) => distributorNumericLabel(key)).join(" -> "),
+        productCodeExtractionRule: "First product/item code at the start of the product row.",
+        productNameExtractionRule: "Product name before the first mapped numeric value.",
+        multilineProductNameRule: "Merge text continuation lines into previous product name.",
+        pageContinuationRule: "Read all pages in order and continue current group across pages.",
+        createdAt:
+          nextProfiles.find(
+            (item) =>
+              item.distributorName.trim().toLowerCase() ===
+              summary.distributorName.trim().toLowerCase(),
+          )?.createdAt ?? now,
+        lastUpdated: now,
+        active: true,
+      };
+      const existingIndex = nextProfiles.findIndex(
+        (item) =>
+          item.distributorName.trim().toLowerCase() ===
+          summary.distributorName.trim().toLowerCase(),
+      );
+      if (existingIndex >= 0) nextProfiles[existingIndex] = profile;
+      else nextProfiles.push(profile);
+      savedCount += 1;
+    }
+
+    setDistributorProfiles(nextProfiles);
+    writeDistributorProfiles(nextProfiles);
+    toast.success(
+      savedCount
+        ? `${savedCount} distributor mapping profile(s) saved.`
+        : "No distributor names were available to save.",
+    );
+  };
+
+  const saveSelectedDistributorProfile = async () => {
+    if (!selectedDistributorProfile?.distributorName.trim()) {
+      toast.error("Distributor name is required.");
+      return;
+    }
+    const now = new Date().toISOString();
+    const profile: DistributorFormatProfile = {
+      ...selectedDistributorProfile,
+      profileName:
+        selectedDistributorProfile.profileName ||
+        `${selectedDistributorProfile.distributorName} mapping`,
+      numericOrder: sanitizeDistributorNumericOrder(selectedDistributorProfile.numericOrder),
+      sourceHeaders: selectedDistributorProfile.sourceHeaders ?? [],
+      sourceColumnPositions: selectedDistributorProfile.sourceColumnPositions ?? {},
+      createdAt: selectedDistributorProfile.createdAt ?? now,
+      lastUpdated: now,
+      active: selectedDistributorProfile.active !== false,
+    };
+    if (await saveDistributorProfile(profile)) {
+      setSelectedDistributorProfile(profile);
+      setDistributorLargePanelMode("view");
+    }
+  };
+
+  const createDistributorFormatDraft = (
+    sourceSampleType: DistributorFormatProfile["sourceSampleType"],
+  ): DistributorFormatProfile => {
+    const now = new Date().toISOString();
+    return {
+      distributorName: "",
+      profileName: "",
+      sourceSampleType,
+      sourceSampleName: "",
+      numericOrder: DISTRIBUTOR_NUMERIC_COLUMNS.map((column) => column.key),
+      sourceHeaders: [],
+      sourceColumnPositions: {},
+      headerRowRule: "Define the source header row or confirm detected headers.",
+      productRowRule: "Product code, full product name, then mapped numeric values.",
+      groupHeadingRule: "Detect group heading rows and keep products under the active group.",
+      groupTotalRule: "Detect Group Total rows or calculate totals from product rows.",
+      dateExtractionRule: "Detect From Date and To Date from report header.",
+      distributorNameExtractionRule: "Detect distributor name from report header or file name.",
+      columnMappingRules: "Map source columns to the standard distributor sales columns.",
+      productCodeExtractionRule: "Extract product code from the start of the product description.",
+      productNameExtractionRule: "Keep product name complete and separate from product code.",
+      multilineProductNameRule: "Merge continuation lines into previous product name.",
+      pageContinuationRule: "Read all pages in order and keep current group across pages.",
+      createdAt: now,
+      lastUpdated: now,
+      active: true,
+    };
+  };
+
+  const addDistributorFormat = (sourceSampleType: DistributorFormatProfile["sourceSampleType"]) => {
+    setSelectedDistributorProfile(createDistributorFormatDraft(sourceSampleType));
+    setDistributorLargePanelMode("edit");
+  };
+
+  const resetDistributorAddForm = () => {
+    setDistributorAddSourceType(null);
+    setDistributorSampleFormatFile(null);
+    setDistributorSampleFormatName("");
+    setDistributorManualDraft(null);
+  };
+
+  const closeDistributorLargePanel = () => {
+    resetDistributorAddForm();
+    setDistributorLargePanelMode(null);
+    setSelectedDistributorProfile(null);
+  };
+
+  const openDistributorLargePanel = (panel: "add" | "search") => {
+    if (distributorLargePanelMode === panel) {
+      closeDistributorLargePanel();
+      return;
+    }
+    resetDistributorAddForm();
+    setSelectedDistributorProfile(null);
+    setDistributorLargePanelMode(panel);
+  };
+
+  const toggleDistributorFormatPanel = (panel: "add" | "search") => {
+    if (distributorLargePanelMode === panel || distributorFormatPanel === panel) {
+      setDistributorFormatPanel(null);
+      closeDistributorLargePanel();
+      return;
+    }
+    setDistributorFormatPanel(null);
+    openDistributorLargePanel(panel);
+  };
+
+  const beginDistributorSampleFormat = (type: "PDF" | "Excel" | "Screenshot") => {
+    setDistributorAddSourceType(type);
+    setDistributorSampleFormatFile(null);
+    setDistributorSampleFormatName("");
+    setDistributorManualDraft(null);
+  };
+
+  const beginManualDistributorFormat = () => {
+    const draft = createDistributorFormatDraft("Manual");
+    setDistributorManualDraft({
+      ...draft,
+      manualColumnMappings: {},
+    });
+    setDistributorAddSourceType(null);
+    setDistributorSampleFormatFile(null);
+    setDistributorSampleFormatName("");
+  };
+
+  const uploadDistributorSampleFile = async (
+    profileName: string,
+    file: File,
+  ): Promise<
+    Pick<
+      DistributorFormatProfile,
+      "sourceStoragePath" | "sourceMimeType" | "sourceFileSize" | "uploadedAt"
+    >
+  > => {
+    if (!authUser) throw new Error("Please sign in before saving distributor formats.");
+    const safeName = safeDistributorProfileName(profileName);
+    const path = `${authUser.id}/${safeName || "distributor-format"}/${Date.now()}-${file.name}`;
+    const { error } = await supabase.storage.from(DISTRIBUTOR_SAMPLE_BUCKET).upload(path, file, {
+      cacheControl: "3600",
+      upsert: true,
+      contentType: file.type || undefined,
+    });
+    if (error) throw error;
+    return {
+      sourceStoragePath: path,
+      sourceMimeType: file.type || undefined,
+      sourceFileSize: file.size,
+      uploadedAt: new Date().toISOString(),
+    };
+  };
+
+  const saveDistributorProfile = async (
+    profile: DistributorFormatProfile,
+    sampleFile?: File | null,
+  ) => {
+    const name = profile.distributorName.trim();
+    if (!name) {
+      toast.error("Distributor name is required.");
+      return false;
+    }
+    if (!authUser) {
+      toast.error("Distributor format could not be saved. Please sign in and try again.");
+      return false;
+    }
+
+    const existingProfile = distributorProfiles.find(
+      (item) => item.distributorName.trim().toLowerCase() === name.toLowerCase(),
+    );
+    const existingBuiltIn = BUILT_IN_DISTRIBUTOR_PROFILES.find(
+      (item) => item.distributorName.trim().toLowerCase() === name.toLowerCase(),
+    );
+    if (
+      (existingProfile || existingBuiltIn) &&
+      !window.confirm("A format with this name already exists. Do you want to replace/update it?")
+    ) {
+      return false;
+    }
+
+    const now = new Date().toISOString();
+    let uploadedSample: Partial<DistributorFormatProfile> = {};
+    if (sampleFile) {
+      try {
+        uploadedSample = await uploadDistributorSampleFile(name, sampleFile);
+      } catch (uploadError) {
+        console.warn("Distributor sample upload failed; saving metadata locally.", uploadError);
+        uploadedSample = {
+          sourceSampleName: sampleFile.name,
+          sourceMimeType: sampleFile.type || undefined,
+          sourceFileSize: sampleFile.size,
+          uploadedAt: now,
+        };
+      }
+    }
+
+    const nextProfile: DistributorFormatProfile = {
+      ...profile,
+      ...uploadedSample,
+      distributorName: name,
+      profileName: profile.profileName.trim() || name,
+      numericOrder: sanitizeDistributorNumericOrder(profile.numericOrder),
+      sourceHeaders: profile.sourceHeaders ?? [],
+      sourceColumnPositions: profile.sourceColumnPositions ?? {},
+      createdAt: existingProfile?.createdAt ?? profile.createdAt ?? now,
+      lastUpdated: now,
+      active: true,
+    };
+
+    try {
+      await saveDistributorProfileToDatabase(authUser.id, nextProfile);
+      const nextProfiles = await loadDistributorProfilesFromDatabase();
+      setDistributorProfiles(nextProfiles);
+      writeDistributorProfiles(nextProfiles);
+      setDistributorFormatPanel(null);
+      setDistributorLargePanelMode("search");
+      toast.success("Distributor format saved successfully.");
+      return true;
+    } catch (error) {
+      console.warn("Distributor format database save failed; trying storage fallback.", error);
+      try {
+        await saveDistributorProfileToStorage(authUser.id, nextProfile);
+        const nextProfiles = await loadDistributorProfilesFromStorage(authUser.id);
+        setDistributorProfiles(nextProfiles);
+        writeDistributorProfiles(nextProfiles);
+        setDistributorFormatPanel(null);
+        setDistributorLargePanelMode("search");
+        toast.success("Distributor format saved successfully.");
+        return true;
+      } catch (fallbackError) {
+        console.error("Distributor format save failed", fallbackError);
+        const nextProfiles = distributorProfiles.filter(
+          (item) => item.distributorName.trim().toLowerCase() !== name.toLowerCase(),
+        );
+        nextProfiles.push(nextProfile);
+        setDistributorProfiles(nextProfiles);
+        writeDistributorProfiles(nextProfiles);
+        setDistributorFormatPanel(null);
+        setDistributorLargePanelMode("search");
+        toast.warning("Distributor format saved locally. Supabase save is not available yet.");
+        return true;
+      }
+    }
+  };
+
+  const saveDistributorSampleFormat = async () => {
+    if (!distributorAddSourceType) return;
+    if (!distributorSampleFormatFile) {
+      toast.error(`Please upload a ${distributorAddSourceType.toLowerCase()} sample file.`);
+      return;
+    }
+    const name = distributorSampleFormatName.trim();
+    if (!name) {
+      toast.error("Please enter distributor name / format name.");
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const profile: DistributorFormatProfile = {
+      distributorName: name,
+      profileName: name,
+      sourceSampleType: distributorAddSourceType,
+      sourceSampleName: distributorSampleFormatFile.name,
+      numericOrder: DISTRIBUTOR_NUMERIC_COLUMNS.map((column) => column.key),
+      sourceHeaders: [`${distributorAddSourceType} sample: ${distributorSampleFormatFile.name}`],
+      sourceColumnPositions: {},
+      manualColumnMappings: {},
+      headerRowRule: `Saved from ${distributorAddSourceType} sample.`,
+      productRowRule: `Use ${distributorAddSourceType} sample as distributor format reference.`,
+      groupHeadingRule: "Detect group headings from the saved sample format.",
+      groupTotalRule: "Detect group total rows from the saved sample format.",
+      dateExtractionRule: "Detect From Date and To Date from the saved sample format.",
+      distributorNameExtractionRule: "Use saved distributor format name.",
+      columnMappingRules: `Saved ${distributorAddSourceType} sample reference.`,
+      productCodeExtractionRule: "Use saved sample mapping reference.",
+      productNameExtractionRule: "Use saved sample mapping reference.",
+      multilineProductNameRule: "Use saved sample mapping reference.",
+      pageContinuationRule: "Use saved sample mapping reference.",
+      createdAt: existingProfile?.createdAt ?? now,
+      lastUpdated: now,
+      active: true,
+    };
+
+    if (await saveDistributorProfile(profile, distributorSampleFormatFile))
+      resetDistributorAddForm();
+  };
+
+  const saveDistributorManualFormat = async () => {
+    if (!distributorManualDraft) return;
+    const name = distributorManualDraft.distributorName.trim();
+    if (!name) {
+      toast.error("Distributor name is required.");
+      return;
+    }
+
+    const manualColumnMappings = distributorManualDraft.manualColumnMappings ?? {};
+    if (!Object.values(manualColumnMappings).some((mapping) => mapping.trim())) {
+      toast.error("Please add at least one manual mapping value.");
+      return;
+    }
+    const profile: DistributorFormatProfile = {
+      ...distributorManualDraft,
+      distributorName: name,
+      profileName: distributorManualDraft.profileName.trim() || name,
+      sourceSampleType: "Manual",
+      sourceSampleName: "Manual mapping",
+      manualColumnMappings,
+      sourceHeaders: Object.values(manualColumnMappings).filter(Boolean),
+      columnMappingRules: Object.entries(manualColumnMappings)
+        .filter(([, mapping]) => mapping.trim())
+        .map(([column, mapping]) => `${column}: ${mapping}`)
+        .join("; "),
+    };
+
+    if (await saveDistributorProfile(profile)) resetDistributorAddForm();
+  };
+
+  const updateSelectedDistributorSample = (file: File | null) => {
+    if (!selectedDistributorProfile || !file) return;
+    setSelectedDistributorProfile({
+      ...selectedDistributorProfile,
+      sourceSampleName: file.name,
+      sourceHeaders:
+        selectedDistributorProfile.sourceSampleType === "PDF"
+          ? ["Detected from PDF sample after upload"]
+          : selectedDistributorProfile.sourceSampleType === "Excel"
+            ? ["Detected from Excel sample after upload"]
+            : selectedDistributorProfile.sourceSampleType === "Screenshot"
+              ? ["Detected from screenshot/image after OCR review"]
+              : selectedDistributorProfile.sourceHeaders,
+      columnMappingRules:
+        selectedDistributorProfile.sourceSampleType === "Screenshot"
+          ? "OCR/table detection requires user verification before saving."
+          : selectedDistributorProfile.columnMappingRules,
+    });
+  };
+
+  const deleteDistributorProfile = async (profile: DistributorFormatProfile) => {
+    try {
+      if (!window.confirm("Are you sure you want to delete this distributor format?")) return;
+      const name = profile.distributorName.trim().toLowerCase();
+      const isBuiltIn = BUILT_IN_DISTRIBUTOR_PROFILES.some(
+        (item) => item.distributorName.trim().toLowerCase() === name,
+      );
+
+      let nextProfiles = distributorProfiles.filter(
+        (item) => item.distributorName.trim().toLowerCase() !== name,
+      );
+      if (isBuiltIn) {
+        nextProfiles.push({
+          ...profile,
+          active: false,
+          lastUpdated: new Date().toISOString(),
+        });
+      }
+
+      setDistributorProfiles(nextProfiles);
+      writeDistributorProfiles(nextProfiles);
+
+      if (selectedDistributorProfile?.distributorName.trim().toLowerCase() === name) {
+        setSelectedDistributorProfile(null);
+        setDistributorProfileDialogMode(null);
+        setDistributorLargePanelMode("search");
+      }
+
+      if (authUser) {
+        try {
+          await deleteDistributorProfileFromDatabase(profile);
+          const databaseProfiles = await loadDistributorProfilesFromDatabase();
+          nextProfiles = isBuiltIn
+            ? [
+                ...databaseProfiles.filter(
+                  (item) => item.distributorName.trim().toLowerCase() !== name,
+                ),
+                {
+                  ...profile,
+                  active: false,
+                  lastUpdated: new Date().toISOString(),
+                },
+              ]
+            : databaseProfiles;
+          setDistributorProfiles(nextProfiles);
+          writeDistributorProfiles(nextProfiles);
+        } catch (databaseError) {
+          console.warn(
+            "Distributor format database delete failed; kept local deletion.",
+            databaseError,
+          );
+        }
+      }
+
+      toast.success("Distributor format deleted.");
+    } catch (error) {
+      console.error("Distributor format delete failed", error);
+      toast.error("Unable to delete this distributor format.");
+    }
+  };
+
+  const updateDistributorCell = (
+    rowIndex: number,
+    key: keyof DistributorSalesRow,
+    value: string,
+  ) => {
+    setDistributorResult((current) => {
+      if (!current) return current;
+      const column = DISTRIBUTOR_SALES_COLUMNS.find((item) => item.key === key);
+      const rows = current.rows.map((row, index) => {
+        if (index !== rowIndex) return row;
+        return {
+          ...row,
+          [key]: column?.numeric && value.trim() !== "" ? Number(value) || 0 : value,
+        };
+      });
+      return { ...current, rows };
+    });
+  };
+
+  const previewDistributorSalesFile = () => {
+    if (!distributorResult?.rows.length) {
+      toast.error("Preview data not available. Please generate report again.");
+      return;
+    }
+    setDistributorReportPreviewOpen((open) => !open);
+  };
+
+  const downloadDistributorSalesFile = () => {
+    if (!distributorGeneratedFile) {
+      toast.error("Download failed. Please generate report again.");
+      return;
+    }
+    setDistributorExporting(true);
+    try {
+      const a = document.createElement("a");
+      a.href = distributorGeneratedFile.url;
+      a.download = distributorGeneratedFile.fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      toast.success("Distributor sales Excel exported.");
+    } catch (error) {
+      console.error("Distributor export failed", error);
+      toast.error("Download failed. Please generate report again.");
+    } finally {
+      setDistributorExporting(false);
+    }
   };
 
   const downloadHistoryItem = async (id: string) => {
@@ -2263,6 +2985,981 @@ function HomePage() {
     );
   }
 
+  if (activeModule === "distributor-sales") {
+    return (
+      <AppShell
+        activeModule={activeModule}
+        dashboardLine={dashboardLine}
+        user={authUser}
+        profilePhoto={profilePhoto}
+        onNavigate={setActiveModule}
+        onOpenHistory={openHistory}
+      >
+        <ModulePageHeader
+          icon={<FileText className="h-5 w-5" />}
+          label="Converter"
+          title="Distributor Sales"
+          description="Convert distributor sales and stock PDFs into one standard Excel workbook."
+        />
+
+        <Dialog
+          open={Boolean(distributorProfileDialogMode)}
+          onOpenChange={(open) => {
+            if (!open) {
+              setDistributorProfileDialogMode(null);
+              setSelectedDistributorProfile(null);
+            }
+          }}
+        >
+          <DialogContent className="max-h-[90vh] overflow-auto sm:max-w-3xl">
+            <DialogHeader>
+              <DialogTitle>
+                {distributorProfileDialogMode === "add"
+                  ? "Add Distributor Format"
+                  : distributorProfileDialogMode === "edit"
+                    ? "Edit Distributor Format"
+                    : "View Distributor Format"}
+              </DialogTitle>
+            </DialogHeader>
+
+            {distributorProfileDialogMode === "add" && (
+              <div className="grid gap-3 sm:grid-cols-2">
+                {(["PDF", "Excel", "Screenshot", "Manual"] as const).map((type) => (
+                  <Button
+                    key={type}
+                    variant="secondary"
+                    className="h-auto justify-start p-4 text-left"
+                    onClick={() => addDistributorFormat(type)}
+                  >
+                    <FileText className="mr-3 h-5 w-5" />
+                    <span>
+                      <span className="block font-semibold">
+                        {type === "PDF"
+                          ? "Add format from PDF sample"
+                          : type === "Excel"
+                            ? "Add format from Excel sample"
+                            : type === "Screenshot"
+                              ? "Add format from screenshot/image"
+                              : "Add format manually"}
+                      </span>
+                      <span className="mt-1 block text-xs text-muted-foreground">
+                        Save mapping rules for future PDFs from this distributor.
+                      </span>
+                    </span>
+                  </Button>
+                ))}
+              </div>
+            )}
+
+            {selectedDistributorProfile && distributorProfileDialogMode !== "add" && (
+              <div className="space-y-4">
+                {distributorProfileDialogMode === "edit" ? (
+                  <>
+                    <DistributorFormatExcelLayout
+                      profile={selectedDistributorProfile}
+                      editable
+                      onNumericOrderChange={(columnIndex, key) => {
+                        const numericOrder = [...selectedDistributorProfile.numericOrder];
+                        numericOrder[columnIndex] = key;
+                        setSelectedDistributorProfile({
+                          ...selectedDistributorProfile,
+                          numericOrder: sanitizeDistributorNumericOrder(numericOrder),
+                          columnMappingRules: sanitizeDistributorNumericOrder(numericOrder)
+                            .map((item) => distributorNumericLabel(item))
+                            .join(" -> "),
+                        });
+                      }}
+                    />
+                    {selectedDistributorProfile.sourceSampleType !== "Manual" && (
+                      <div className="rounded-md border border-border bg-background/60 p-3">
+                        <div className="text-xs font-bold uppercase text-primary">
+                          {selectedDistributorProfile.sourceSampleType} sample
+                        </div>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          {selectedDistributorProfile.sourceSampleType === "PDF"
+                            ? "Upload a distributor PDF sample to review detected headers, groups, dates, and mapping."
+                            : selectedDistributorProfile.sourceSampleType === "Excel"
+                              ? "Upload an Excel sample to review the expected output/layout mapping."
+                              : "Upload a screenshot/image. OCR confidence should be verified before saving."}
+                        </p>
+                        <label className="mt-3 flex min-h-24 cursor-pointer flex-col items-center justify-center rounded-md border border-dashed border-border bg-card p-4 text-center text-sm text-muted-foreground hover:bg-muted/40">
+                          <Upload className="mb-2 h-5 w-5 text-primary" />
+                          {selectedDistributorProfile.sourceSampleName ||
+                            `Choose ${selectedDistributorProfile.sourceSampleType?.toLowerCase()} sample`}
+                          <input
+                            type="file"
+                            className="hidden"
+                            accept={
+                              selectedDistributorProfile.sourceSampleType === "PDF"
+                                ? ".pdf"
+                                : selectedDistributorProfile.sourceSampleType === "Excel"
+                                  ? ".xlsx,.xls"
+                                  : "image/*"
+                            }
+                            onChange={(event) =>
+                              updateSelectedDistributorSample(event.target.files?.[0] ?? null)
+                            }
+                          />
+                        </label>
+                        <div className="mt-3 rounded-md border border-border bg-card p-3 text-xs text-muted-foreground">
+                          Mapping preview:{" "}
+                          {selectedDistributorProfile.sourceHeaders.length
+                            ? selectedDistributorProfile.sourceHeaders.join(", ")
+                            : "Upload a sample to attach the source reference, then confirm mapping below."}
+                        </div>
+                      </div>
+                    )}
+                    <DistributorProfileField
+                      label="Distributor Name"
+                      value={selectedDistributorProfile.distributorName}
+                      onChange={(value) =>
+                        setSelectedDistributorProfile({
+                          ...selectedDistributorProfile,
+                          distributorName: value,
+                        })
+                      }
+                    />
+                    <DistributorProfileField
+                      label="Format/Profile Name"
+                      value={selectedDistributorProfile.profileName}
+                      onChange={(value) =>
+                        setSelectedDistributorProfile({
+                          ...selectedDistributorProfile,
+                          profileName: value,
+                        })
+                      }
+                    />
+                    <DistributorProfileField
+                      label="Sample Source Name"
+                      value={selectedDistributorProfile.sourceSampleName ?? ""}
+                      onChange={(value) =>
+                        setSelectedDistributorProfile({
+                          ...selectedDistributorProfile,
+                          sourceSampleName: value,
+                        })
+                      }
+                    />
+                    <DistributorProfileField
+                      label="Column Mapping Rules"
+                      value={selectedDistributorProfile.columnMappingRules ?? ""}
+                      onChange={(value) =>
+                        setSelectedDistributorProfile({
+                          ...selectedDistributorProfile,
+                          columnMappingRules: value,
+                        })
+                      }
+                      multiline
+                    />
+                    <DistributorProfileField
+                      label="Group Detection Rules"
+                      value={selectedDistributorProfile.groupHeadingRule}
+                      onChange={(value) =>
+                        setSelectedDistributorProfile({
+                          ...selectedDistributorProfile,
+                          groupHeadingRule: value,
+                        })
+                      }
+                      multiline
+                    />
+                    <DistributorProfileField
+                      label="Date Detection Rules"
+                      value={selectedDistributorProfile.dateExtractionRule}
+                      onChange={(value) =>
+                        setSelectedDistributorProfile({
+                          ...selectedDistributorProfile,
+                          dateExtractionRule: value,
+                        })
+                      }
+                      multiline
+                    />
+                    <DistributorProfileField
+                      label="Product Code Rule"
+                      value={selectedDistributorProfile.productCodeExtractionRule ?? ""}
+                      onChange={(value) =>
+                        setSelectedDistributorProfile({
+                          ...selectedDistributorProfile,
+                          productCodeExtractionRule: value,
+                        })
+                      }
+                      multiline
+                    />
+                    <DistributorProfileField
+                      label="Product Name Rule"
+                      value={selectedDistributorProfile.productNameExtractionRule ?? ""}
+                      onChange={(value) =>
+                        setSelectedDistributorProfile({
+                          ...selectedDistributorProfile,
+                          productNameExtractionRule: value,
+                        })
+                      }
+                      multiline
+                    />
+                    {selectedDistributorProfile.sourceSampleType === "Manual" && (
+                      <ManualDistributorMappings
+                        mappings={selectedDistributorProfile.manualColumnMappings ?? {}}
+                        onChange={(key, value) => {
+                          const manualColumnMappings = {
+                            ...(selectedDistributorProfile.manualColumnMappings ?? {}),
+                            [key]: value,
+                          };
+                          setSelectedDistributorProfile({
+                            ...selectedDistributorProfile,
+                            manualColumnMappings,
+                            columnMappingRules: Object.entries(manualColumnMappings)
+                              .map(([column, mapping]) => `${column}: ${mapping}`)
+                              .join("; "),
+                          });
+                        }}
+                      />
+                    )}
+                    <Button onClick={saveSelectedDistributorProfile} className="w-full">
+                      <Save className="mr-2 h-4 w-4" />
+                      Save Changes
+                    </Button>
+                  </>
+                ) : (
+                  <div className="grid gap-3 text-sm">
+                    <DistributorFormatExcelLayout profile={selectedDistributorProfile} />
+                    <ProfileDetail
+                      label="Distributor Name"
+                      value={selectedDistributorProfile.distributorName}
+                    />
+                    <ProfileDetail
+                      label="Format Name"
+                      value={selectedDistributorProfile.profileName}
+                    />
+                    <ProfileDetail
+                      label="Source"
+                      value={`${selectedDistributorProfile.sourceSampleType ?? "Manual"}${
+                        selectedDistributorProfile.sourceSampleName
+                          ? ` - ${selectedDistributorProfile.sourceSampleName}`
+                          : ""
+                      }`}
+                    />
+                    <ProfileDetail
+                      label="Saved Column Mapping"
+                      value={
+                        selectedDistributorProfile.columnMappingRules ||
+                        selectedDistributorProfile.numericOrder
+                          .map((key) => distributorNumericLabel(key))
+                          .join(" -> ")
+                      }
+                    />
+                    <ProfileDetail
+                      label="Group Rules"
+                      value={selectedDistributorProfile.groupHeadingRule}
+                    />
+                    <ProfileDetail
+                      label="Date Rules"
+                      value={selectedDistributorProfile.dateExtractionRule}
+                    />
+                    <ProfileDetail
+                      label="Product Code Rule"
+                      value={selectedDistributorProfile.productCodeExtractionRule}
+                    />
+                    <ProfileDetail
+                      label="Product Name Rule"
+                      value={selectedDistributorProfile.productNameExtractionRule}
+                    />
+                    <ProfileDetail
+                      label="Last Updated"
+                      value={formatShortDate(selectedDistributorProfile.lastUpdated)}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
+
+        <main className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
+          <div className="space-y-4">
+            {distributorLargePanelMode && (
+              <Card className="border-border bg-card p-4 shadow-[var(--shadow-soft)] sm:p-6">
+                <div className="mb-4 flex items-start justify-between gap-4">
+                  <div>
+                    <div className="text-xs font-bold uppercase text-primary">
+                      Distributor Format
+                    </div>
+                    <h2 className="mt-1 text-xl font-semibold text-foreground">
+                      {distributorLargePanelMode === "add"
+                        ? distributorAddSourceType
+                          ? distributorAddSourceType === "PDF"
+                            ? "Add from PDF sample"
+                            : distributorAddSourceType === "Excel"
+                              ? "Add from Excel sample"
+                              : "Add from screenshot/image"
+                          : distributorManualDraft
+                            ? "Add manually"
+                            : "Add Distributor Format"
+                        : distributorLargePanelMode === "search"
+                          ? "Search Saved Distributor Formats"
+                          : distributorLargePanelMode === "edit"
+                            ? "Edit Distributor Format"
+                            : "View Distributor Format"}
+                    </h2>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      {distributorLargePanelMode === "search"
+                        ? `Showing ${visibleDistributorProfiles.length} of ${allDistributorProfiles.length} saved format(s).`
+                        : "Manage distributor format settings in a wider, readable workspace."}
+                    </p>
+                  </div>
+                  <Button variant="secondary" size="sm" onClick={closeDistributorLargePanel}>
+                    <X className="mr-2 h-4 w-4" />
+                    Close
+                  </Button>
+                </div>
+
+                {distributorLargePanelMode === "add" &&
+                  !distributorAddSourceType &&
+                  !distributorManualDraft && (
+                    <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-4">
+                      {(["PDF", "Excel", "Screenshot"] as const).map((type) => (
+                        <Button
+                          key={type}
+                          variant="secondary"
+                          className="h-auto min-w-0 items-start justify-start p-4 text-left"
+                          onClick={() => beginDistributorSampleFormat(type)}
+                        >
+                          <FileText className="mr-3 mt-0.5 h-5 w-5 shrink-0" />
+                          <span className="min-w-0 flex-1 whitespace-normal">
+                            <span className="block whitespace-normal break-words text-sm font-semibold leading-snug">
+                              {type === "PDF"
+                                ? "Add from PDF sample"
+                                : type === "Excel"
+                                  ? "Add from Excel sample"
+                                  : "Add from screenshot/image"}
+                            </span>
+                            <span className="mt-1 block whitespace-normal break-words text-xs leading-snug text-muted-foreground">
+                              Save a reusable sample reference.
+                            </span>
+                          </span>
+                        </Button>
+                      ))}
+                      <Button
+                        variant="secondary"
+                        className="h-auto min-w-0 items-start justify-start p-4 text-left"
+                        onClick={beginManualDistributorFormat}
+                      >
+                        <FileText className="mr-3 mt-0.5 h-5 w-5 shrink-0" />
+                        <span className="min-w-0 flex-1 whitespace-normal">
+                          <span className="block whitespace-normal break-words text-sm font-semibold leading-snug">
+                            Add manually
+                          </span>
+                          <span className="mt-1 block whitespace-normal break-words text-xs leading-snug text-muted-foreground">
+                            Map each column with dropdowns or custom text.
+                          </span>
+                        </span>
+                      </Button>
+                    </div>
+                  )}
+
+                {distributorLargePanelMode === "add" && distributorAddSourceType && (
+                  <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(260px,360px)]">
+                    <div className="rounded-md border border-border bg-background/60 p-4">
+                      <label className="block text-sm font-semibold text-foreground">
+                        Distributor/Format Name
+                        <input
+                          value={distributorSampleFormatName}
+                          onChange={(event) => setDistributorSampleFormatName(event.target.value)}
+                          placeholder="Enter distributor name / format name"
+                          className="mt-2 h-11 w-full rounded-md border border-border bg-background px-3 text-sm font-normal outline-none focus:ring-2 focus:ring-primary/30"
+                        />
+                      </label>
+                      <label className="mt-4 flex min-h-44 cursor-pointer flex-col items-center justify-center rounded-md border border-dashed border-border bg-card/70 p-5 text-center text-sm text-muted-foreground hover:bg-muted/40">
+                        <Upload className="mb-3 h-7 w-7 text-primary" />
+                        <span className="text-base font-semibold text-foreground">
+                          {distributorSampleFormatFile?.name ||
+                            `Choose ${distributorAddSourceType.toLowerCase()} sample`}
+                        </span>
+                        <span className="mt-1 text-xs text-muted-foreground">
+                          {distributorAddSourceType === "PDF"
+                            ? "PDF files only"
+                            : distributorAddSourceType === "Excel"
+                              ? "Excel .xlsx or .xls files only"
+                              : "Image files only"}
+                        </span>
+                        <input
+                          type="file"
+                          className="hidden"
+                          accept={
+                            distributorAddSourceType === "PDF"
+                              ? ".pdf"
+                              : distributorAddSourceType === "Excel"
+                                ? ".xlsx,.xls"
+                                : "image/*"
+                          }
+                          onChange={(event) =>
+                            setDistributorSampleFormatFile(event.target.files?.[0] ?? null)
+                          }
+                        />
+                      </label>
+                    </div>
+                    <div className="rounded-md border border-border bg-background/60 p-4">
+                      <div className="text-sm font-semibold text-foreground">
+                        Save sample format
+                      </div>
+                      <p className="mt-2 text-sm text-muted-foreground">
+                        The selected sample will be saved with this format name and shown in Saved
+                        Distributor Formats.
+                      </p>
+                      <div className="mt-5 grid gap-2">
+                        <Button onClick={saveDistributorSampleFormat}>
+                          <Save className="mr-2 h-4 w-4" />
+                          Save Format
+                        </Button>
+                        <Button variant="secondary" onClick={resetDistributorAddForm}>
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {distributorLargePanelMode === "add" && distributorManualDraft && (
+                  <div className="space-y-4">
+                    <label className="block text-sm font-semibold text-foreground">
+                      Distributor/Format Name
+                      <input
+                        value={distributorManualDraft.distributorName}
+                        onChange={(event) =>
+                          setDistributorManualDraft({
+                            ...distributorManualDraft,
+                            distributorName: event.target.value,
+                            profileName: distributorManualDraft.profileName || event.target.value,
+                          })
+                        }
+                        placeholder="Enter distributor name / format name"
+                        className="mt-2 h-11 w-full rounded-md border border-border bg-background px-3 text-sm font-normal outline-none focus:ring-2 focus:ring-primary/30"
+                      />
+                    </label>
+                    <ManualDistributorMappings
+                      mappings={distributorManualDraft.manualColumnMappings ?? {}}
+                      onChange={(key, value) => {
+                        const manualColumnMappings = {
+                          ...(distributorManualDraft.manualColumnMappings ?? {}),
+                          [key]: value,
+                        };
+                        setDistributorManualDraft({
+                          ...distributorManualDraft,
+                          manualColumnMappings,
+                          columnMappingRules: Object.entries(manualColumnMappings)
+                            .filter(([, mapping]) => mapping.trim())
+                            .map(([column, mapping]) => `${column}: ${mapping}`)
+                            .join("; "),
+                        });
+                      }}
+                    />
+                    <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+                      <Button variant="secondary" onClick={resetDistributorAddForm}>
+                        Cancel
+                      </Button>
+                      <Button onClick={saveDistributorManualFormat}>
+                        <Save className="mr-2 h-4 w-4" />
+                        Save Format
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {distributorLargePanelMode === "search" && (
+                  <div className="space-y-4">
+                    <input
+                      value={distributorProfileSearch}
+                      onChange={(event) => setDistributorProfileSearch(event.target.value)}
+                      placeholder="Search by distributor name or format name..."
+                      className="h-11 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-primary/30"
+                    />
+                    <div className="grid max-h-[58vh] gap-3 overflow-y-auto pr-1 md:grid-cols-2">
+                      {visibleDistributorProfiles.map((profile) => (
+                        <div
+                          key={`${profile.distributorName}-${profile.profileName}`}
+                          className="rounded-md border border-border bg-background/50 p-4"
+                        >
+                          <div className="min-w-0 truncate text-base font-semibold text-foreground">
+                            {profile.distributorName}
+                          </div>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              onClick={() => {
+                                setSelectedDistributorProfile(profile);
+                                setDistributorLargePanelMode("view");
+                              }}
+                            >
+                              View
+                            </Button>
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              onClick={() => {
+                                setSelectedDistributorProfile(profile);
+                                setDistributorLargePanelMode("edit");
+                              }}
+                            >
+                              Edit
+                            </Button>
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              onClick={() => deleteDistributorProfile(profile)}
+                            >
+                              Delete
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                      {!visibleDistributorProfiles.length && (
+                        <div className="rounded-md border border-border bg-background/50 p-4 text-sm text-muted-foreground">
+                          No saved distributor formats match your search.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {selectedDistributorProfile && distributorLargePanelMode === "view" && (
+                  <div className="grid gap-4">
+                    <DistributorFormatExcelLayout profile={selectedDistributorProfile} />
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <ProfileDetail
+                        label="Distributor Name"
+                        value={selectedDistributorProfile.distributorName}
+                      />
+                      <ProfileDetail
+                        label="Format Name"
+                        value={selectedDistributorProfile.profileName}
+                      />
+                      <ProfileDetail
+                        label="Source"
+                        value={`${selectedDistributorProfile.sourceSampleType ?? "Manual"}${
+                          selectedDistributorProfile.sourceSampleName
+                            ? ` - ${selectedDistributorProfile.sourceSampleName}`
+                            : ""
+                        }`}
+                      />
+                      <ProfileDetail
+                        label="Last Updated"
+                        value={formatShortDate(selectedDistributorProfile.lastUpdated)}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {selectedDistributorProfile && distributorLargePanelMode === "edit" && (
+                  <div className="space-y-4">
+                    <DistributorFormatExcelLayout
+                      profile={selectedDistributorProfile}
+                      editable
+                      onNumericOrderChange={(columnIndex, key) => {
+                        const numericOrder = [...selectedDistributorProfile.numericOrder];
+                        numericOrder[columnIndex] = key;
+                        setSelectedDistributorProfile({
+                          ...selectedDistributorProfile,
+                          numericOrder: sanitizeDistributorNumericOrder(numericOrder),
+                          columnMappingRules: sanitizeDistributorNumericOrder(numericOrder)
+                            .map((item) => distributorNumericLabel(item))
+                            .join(" -> "),
+                        });
+                      }}
+                    />
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <DistributorProfileField
+                        label="Distributor Name"
+                        value={selectedDistributorProfile.distributorName}
+                        onChange={(value) =>
+                          setSelectedDistributorProfile({
+                            ...selectedDistributorProfile,
+                            distributorName: value,
+                          })
+                        }
+                      />
+                      <DistributorProfileField
+                        label="Format/Profile Name"
+                        value={selectedDistributorProfile.profileName}
+                        onChange={(value) =>
+                          setSelectedDistributorProfile({
+                            ...selectedDistributorProfile,
+                            profileName: value,
+                          })
+                        }
+                      />
+                    </div>
+                    <DistributorProfileField
+                      label="Column Mapping Rules"
+                      value={selectedDistributorProfile.columnMappingRules ?? ""}
+                      onChange={(value) =>
+                        setSelectedDistributorProfile({
+                          ...selectedDistributorProfile,
+                          columnMappingRules: value,
+                        })
+                      }
+                      multiline
+                    />
+                    {selectedDistributorProfile.sourceSampleType === "Manual" && (
+                      <ManualDistributorMappings
+                        mappings={selectedDistributorProfile.manualColumnMappings ?? {}}
+                        onChange={(key, value) => {
+                          const manualColumnMappings = {
+                            ...(selectedDistributorProfile.manualColumnMappings ?? {}),
+                            [key]: value,
+                          };
+                          setSelectedDistributorProfile({
+                            ...selectedDistributorProfile,
+                            manualColumnMappings,
+                            columnMappingRules: Object.entries(manualColumnMappings)
+                              .map(([column, mapping]) => `${column}: ${mapping}`)
+                              .join("; "),
+                          });
+                        }}
+                      />
+                    )}
+                    <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+                      <Button variant="secondary" onClick={closeDistributorLargePanel}>
+                        Cancel
+                      </Button>
+                      <Button onClick={saveSelectedDistributorProfile}>
+                        <Save className="mr-2 h-4 w-4" />
+                        Save Changes
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </Card>
+            )}
+
+            <div className="grid gap-3 lg:grid-cols-2">
+              <UploadCard
+                step={1}
+                title="Distributor PDF Files"
+                subtitle={
+                  distributorFiles.length
+                    ? `${distributorFiles.length} distributor PDF file(s) selected`
+                    : "Upload one or many distributor sales PDF reports"
+                }
+                icon={<FileText className="h-5 w-5" />}
+                accept=".pdf"
+                multiple
+                ready={distributorFiles.length > 0}
+                onClick={() => distributorInputRef.current?.click()}
+                compact
+              >
+                <input
+                  ref={distributorInputRef}
+                  type="file"
+                  accept=".pdf"
+                  multiple
+                  className="hidden"
+                  onChange={(event) => {
+                    const files = Array.from(event.target.files ?? []).filter((file) =>
+                      file.name.toLowerCase().endsWith(".pdf"),
+                    );
+                    setDistributorFiles(files);
+                    setDistributorResult(null);
+                    clearDistributorGeneratedFile();
+                    setDistributorReportPreviewOpen(false);
+                    setDistributorSampleMappingOpen(false);
+                  }}
+                />
+                {distributorFiles.length ? (
+                  <MultiFileList
+                    files={distributorFiles}
+                    onClear={() => {
+                      setDistributorFiles([]);
+                      setDistributorResult(null);
+                      clearDistributorGeneratedFile();
+                      setDistributorReportPreviewOpen(false);
+                      setDistributorSampleMappingOpen(false);
+                      if (distributorInputRef.current) distributorInputRef.current.value = "";
+                    }}
+                    onRemove={(file) => {
+                      setDistributorFiles((files) => files.filter((item) => item !== file));
+                      setDistributorResult(null);
+                      clearDistributorGeneratedFile();
+                      setDistributorReportPreviewOpen(false);
+                      setDistributorSampleMappingOpen(false);
+                      if (distributorInputRef.current) distributorInputRef.current.value = "";
+                    }}
+                  />
+                ) : (
+                  <EmptyHint icon={<FileText className="h-7 w-7" />} label="Choose PDF files" />
+                )}
+              </UploadCard>
+
+              <Card className="flex h-[22rem] flex-col overflow-hidden border-border bg-card p-4 shadow-[var(--shadow-soft)]">
+                <div>
+                  <div className="text-xs font-bold uppercase text-primary">Step 2</div>
+                  <h2 className="mt-1 text-lg font-semibold text-foreground">Distributor Format</h2>
+                  <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                    Add new distributor format or search saved distributor formats.
+                  </p>
+                  <div className="mt-2 rounded-md border border-border bg-background/60 px-3 py-1.5 text-sm font-semibold text-foreground">
+                    Saved Formats: {allDistributorProfiles.length}
+                  </div>
+                </div>
+                <div className="mt-3 grid gap-2">
+                  <Button
+                    className="w-full shadow-[var(--shadow-elegant)]"
+                    onClick={() => toggleDistributorFormatPanel("add")}
+                  >
+                    <FileText className="mr-2 h-4 w-4" />
+                    Add Distributor Format
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    className="w-full"
+                    onClick={() => toggleDistributorFormatPanel("search")}
+                  >
+                    <Search className="mr-2 h-4 w-4" />
+                    Search Saved Distributor Formats
+                  </Button>
+                </div>
+              </Card>
+            </div>
+
+            <Card className="border-border bg-card p-5 shadow-[var(--shadow-soft)]">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <div className="text-xs font-bold uppercase text-primary">Step 3</div>
+                  <h2 className="mt-1 text-lg font-semibold text-foreground">Generate Report</h2>
+                  <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                    Generate the distributor sales Excel after selecting PDF files.
+                  </p>
+                </div>
+                <Button
+                  size="lg"
+                  className="w-full shadow-[var(--shadow-elegant)] sm:w-auto"
+                  onClick={processDistributorSales}
+                  disabled={!distributorFiles.length || distributorProcessing}
+                >
+                  {distributorProcessing ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Generating...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="mr-2 h-4 w-4" />
+                      Generate Report
+                    </>
+                  )}
+                </Button>
+              </div>
+            </Card>
+
+            {distributorResult && (
+              <Card className="border-border bg-card p-4 shadow-[var(--shadow-soft)] sm:p-6">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                  <div>
+                    <div className="text-xs font-bold uppercase text-primary">Step 4</div>
+                    <h2 className="mt-1 text-lg font-semibold text-foreground">
+                      Generated Report Options
+                    </h2>
+                    <p className="text-sm text-muted-foreground">
+                      {distributorResult.rows.filter((row) => row.rowType === "product").length}{" "}
+                      product row(s) and{" "}
+                      {distributorResult.summaries.reduce(
+                        (sum, summary) => sum + summary.groups.length,
+                        0,
+                      )}{" "}
+                      group(s) detected from {distributorResult.summaries.length} PDF file(s).
+                    </p>
+                  </div>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Button
+                      variant="secondary"
+                      onClick={() => setDistributorSampleMappingOpen((open) => !open)}
+                      disabled={!distributorResult.summaries.length}
+                      className="w-full sm:w-auto"
+                    >
+                      <TableProperties className="mr-2 h-4 w-4" />
+                      Sample Mapping
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      onClick={previewDistributorSalesFile}
+                      disabled={!distributorGeneratedFile || !distributorResult.rows.length}
+                      className="w-full sm:w-auto"
+                    >
+                      <Eye className="mr-2 h-4 w-4" />
+                      Preview File
+                    </Button>
+                    <Button
+                      onClick={downloadDistributorSalesFile}
+                      disabled={!distributorGeneratedFile || distributorExporting}
+                      className="w-full shadow-[var(--shadow-elegant)] sm:w-auto"
+                    >
+                      {distributorExporting ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Preparing...
+                        </>
+                      ) : (
+                        <>
+                          <Download className="mr-2 h-4 w-4" />
+                          Download File
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+
+                {distributorSampleMappingOpen && (
+                  <>
+                    <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      {distributorResult.summaries.map((summary) => (
+                        <div
+                          key={summary.fileName}
+                          className="rounded-md border border-border bg-background/50 p-3"
+                        >
+                          <div className="truncate text-sm font-semibold text-foreground">
+                            {summary.distributorName || summary.fileName}
+                          </div>
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            {summary.rowsExtracted} product rows - {summary.groups.length} group(s)
+                            - {summary.mappedColumns.length} mapped column(s)
+                          </div>
+                          <div className="mt-2 text-xs text-muted-foreground">
+                            {summary.fromDate || "From date unknown"} -{" "}
+                            {summary.toDate || "To date unknown"}
+                          </div>
+                          <div className="mt-3 rounded-md border border-border bg-card/70 p-2 text-xs">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-semibold text-foreground">
+                                {summary.profileName}
+                              </span>
+                              <span
+                                className={
+                                  summary.profileStatus === "saved"
+                                    ? "text-emerald-600"
+                                    : summary.profileStatus === "auto-detected"
+                                      ? "text-primary"
+                                      : "text-warning-foreground"
+                                }
+                              >
+                                {summary.profileStatus === "saved"
+                                  ? "Saved profile"
+                                  : summary.profileStatus === "auto-detected"
+                                    ? "Auto-detected"
+                                    : "Verify mapping"}
+                              </span>
+                            </div>
+                            <div className="mt-2 line-clamp-3 text-muted-foreground">
+                              {summary.suggestedNumericOrder
+                                .map((key) => distributorNumericLabel(key))
+                                .join(" -> ")}
+                            </div>
+                          </div>
+                          {summary.warnings.length > 0 && (
+                            <div className="mt-2 text-xs text-warning-foreground">
+                              {summary.warnings[0]}
+                            </div>
+                          )}
+                          {summary.groups.length > 0 && (
+                            <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+                              {summary.groups.slice(0, 4).map((group) => (
+                                <div key={group.name} className="truncate">
+                                  {group.name}: {group.productCount} products, total{" "}
+                                  {group.totalSource}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+
+                    {distributorResult.warnings.length > 0 && (
+                      <div className="mt-5 rounded-md border border-warning/40 bg-warning/10 p-4 text-sm text-warning-foreground">
+                        <div className="mb-1 flex items-center gap-2 font-semibold">
+                          <AlertTriangle className="h-4 w-4" />
+                          Review warnings
+                        </div>
+                        <ul className="list-inside list-disc space-y-1 text-xs">
+                          {distributorResult.warnings.slice(0, 8).map((warning) => (
+                            <li key={warning}>{warning}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {distributorReportPreviewOpen && (
+                  <div className="mt-5 max-h-[70vh] overflow-auto rounded-md border border-border bg-background">
+                    <DistributorSalesPreviewTable
+                      rows={distributorResult.rows}
+                      onCellChange={updateDistributorCell}
+                    />
+                  </div>
+                )}
+              </Card>
+            )}
+          </div>
+
+          <aside className="space-y-4">
+            <Card className="border-border bg-card p-5 shadow-[var(--shadow-soft)]">
+              <div className="mb-4 flex items-center justify-between">
+                <div>
+                  <div className="text-xs font-bold uppercase text-primary">Run status</div>
+                  <h2 className="mt-1 text-base font-semibold text-foreground">
+                    Distributor converter
+                  </h2>
+                </div>
+                <ShieldCheck className="h-5 w-5 text-primary" />
+              </div>
+              <div className="space-y-3">
+                <ChecklistItem done={distributorFiles.length > 0} label="PDF files attached" />
+                <ChecklistItem done={Boolean(distributorResult)} label="Preview generated" />
+                <ChecklistItem
+                  done={Boolean(distributorResult?.rows.length)}
+                  label="Product rows extracted"
+                />
+              </div>
+            </Card>
+
+            <Card className="border-border bg-card p-5 shadow-[var(--shadow-soft)]">
+              <div className="grid grid-cols-2 gap-3">
+                <CompactMetric
+                  icon={<FileText className="h-4 w-4" />}
+                  label="PDFs"
+                  value={distributorFiles.length}
+                />
+                <CompactMetric
+                  icon={<TableProperties className="h-4 w-4" />}
+                  label="Rows"
+                  value={
+                    distributorResult
+                      ? distributorResult.rows.filter((row) => row.rowType === "product").length
+                      : "-"
+                  }
+                />
+                <CompactMetric
+                  icon={<AlertTriangle className="h-4 w-4" />}
+                  label="Warnings"
+                  value={distributorResult?.warnings.length ?? "-"}
+                />
+                <CompactMetric
+                  icon={<CheckCircle2 className="h-4 w-4" />}
+                  label="Mapped"
+                  value={
+                    distributorResult
+                      ? Math.max(
+                          ...distributorResult.summaries.map((item) => item.mappedColumns.length),
+                          0,
+                        )
+                      : "-"
+                  }
+                />
+              </div>
+            </Card>
+          </aside>
+        </main>
+      </AppShell>
+    );
+  }
+
   if (activeModule === "history") {
     return (
       <AppShell
@@ -2829,6 +4526,12 @@ function AppShell({
       label: "Planned Summary",
       icon: <CalendarDays className="h-4 w-4" />,
       description: "Averages",
+    },
+    {
+      id: "distributor-sales" as const,
+      label: "Distributor Sales",
+      icon: <FileText className="h-4 w-4" />,
+      description: "PDF to Excel",
     },
   ];
 
@@ -4780,6 +6483,298 @@ function clearReportHistoryCache(userId: string) {
   window.localStorage.removeItem(reportHistoryCacheKey(userId));
 }
 
+function readDistributorProfiles(): DistributorFormatProfile[] {
+  if (typeof window === "undefined") return [];
+
+  try {
+    const raw = window.localStorage.getItem(DISTRIBUTOR_PROFILE_STORAGE_KEY);
+    if (!raw) return [];
+    const profiles = JSON.parse(raw) as Partial<DistributorFormatProfile>[];
+    if (!Array.isArray(profiles)) return [];
+    return profiles
+      .filter((profile): profile is DistributorFormatProfile =>
+        Boolean(profile.distributorName && Array.isArray(profile.numericOrder)),
+      )
+      .map((profile) => ({
+        ...profile,
+        numericOrder: sanitizeDistributorNumericOrder(profile.numericOrder),
+        sourceHeaders: Array.isArray(profile.sourceHeaders) ? profile.sourceHeaders : [],
+        sourceColumnPositions: profile.sourceColumnPositions ?? {},
+        manualColumnMappings: profile.manualColumnMappings ?? {},
+        headerRowRule: profile.headerRowRule || "Auto-detected from PDF header aliases",
+        productRowRule:
+          profile.productRowRule ||
+          "Product code, complete product name, then mapped numeric values",
+        groupHeadingRule: profile.groupHeadingRule || "Auto-detect uppercase/group heading lines",
+        groupTotalRule: profile.groupTotalRule || "Use PDF Group Total or calculated fallback",
+        dateExtractionRule: profile.dateExtractionRule || "Detect From Date and To Date from PDF",
+        profileName: profile.profileName || `${profile.distributorName} profile`,
+        lastUpdated: profile.lastUpdated || new Date().toISOString(),
+        active: profile.active !== false,
+      }));
+  } catch (error) {
+    console.warn("Distributor profile read failed", error);
+    return [];
+  }
+}
+
+function writeDistributorProfiles(profiles: DistributorFormatProfile[]) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(DISTRIBUTOR_PROFILE_STORAGE_KEY, JSON.stringify(profiles));
+}
+
+type DistributorFormatProfileRow = Tables<"distributor_format_profiles">;
+
+function safeDistributorProfileName(value: string): string {
+  return (
+    value
+      .trim()
+      .replace(/[^a-z0-9._-]+/gi, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 80) || "distributor-format"
+  );
+}
+
+function stringArrayFromJson(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+function recordFromJson(value: unknown): Record<string, number> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const result: Record<string, number> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    if (typeof raw === "number") result[key] = raw;
+  }
+  return result;
+}
+
+function stringRecordFromJson(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const result: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    if (typeof raw === "string") result[key] = raw;
+  }
+  return result;
+}
+
+function distributorProfileFromRow(row: DistributorFormatProfileRow): DistributorFormatProfile {
+  return {
+    distributorName: row.distributor_name,
+    profileName: row.profile_name,
+    sourceSampleType: row.source_sample_type as DistributorFormatProfile["sourceSampleType"],
+    sourceSampleName: row.source_sample_name ?? undefined,
+    sourceStoragePath: row.source_storage_path ?? undefined,
+    sourceMimeType: row.source_mime_type ?? undefined,
+    sourceFileSize: row.source_file_size ?? undefined,
+    uploadedAt: row.uploaded_at ?? undefined,
+    numericOrder: sanitizeDistributorNumericOrder(row.numeric_order),
+    sourceHeaders: stringArrayFromJson(row.source_headers),
+    sourceColumnPositions: recordFromJson(row.source_column_positions),
+    manualColumnMappings: stringRecordFromJson(row.manual_column_mappings),
+    headerRowRule: row.header_row_rule,
+    productRowRule: row.product_row_rule,
+    groupHeadingRule: row.group_heading_rule,
+    groupTotalRule: row.group_total_rule,
+    dateExtractionRule: row.date_extraction_rule,
+    distributorNameExtractionRule: row.distributor_name_extraction_rule ?? undefined,
+    columnMappingRules: row.column_mapping_rules ?? undefined,
+    productCodeExtractionRule: row.product_code_extraction_rule ?? undefined,
+    productNameExtractionRule: row.product_name_extraction_rule ?? undefined,
+    multilineProductNameRule: row.multiline_product_name_rule ?? undefined,
+    pageContinuationRule: row.page_continuation_rule ?? undefined,
+    createdAt: row.created_at,
+    lastUpdated: row.updated_at,
+    active: row.active,
+  };
+}
+
+async function loadDistributorProfilesFromDatabase(): Promise<DistributorFormatProfile[]> {
+  const { data, error } = await supabase
+    .from("distributor_format_profiles")
+    .select("*")
+    .eq("active", true)
+    .order("updated_at", { ascending: false });
+  if (error) {
+    const { data: userResult } = await supabase.auth.getUser();
+    const userId = userResult.user?.id;
+    if (userId) return loadDistributorProfilesFromStorage(userId);
+    throw error;
+  }
+  return (data ?? []).map(distributorProfileFromRow);
+}
+
+async function loadDistributorProfilesFromStorage(
+  userId: string,
+): Promise<DistributorFormatProfile[]> {
+  const folder = `${userId}/${DISTRIBUTOR_PROFILE_STORAGE_FOLDER}`;
+  const { data: files, error } = await supabase.storage
+    .from(DISTRIBUTOR_SAMPLE_BUCKET)
+    .list(folder, { limit: 1000, sortBy: { column: "updated_at", order: "desc" } });
+  if (error) throw error;
+
+  const profiles: DistributorFormatProfile[] = [];
+  for (const file of files ?? []) {
+    if (!file.name.endsWith(".json")) continue;
+    const path = `${folder}/${file.name}`;
+    const { data, error: downloadError } = await supabase.storage
+      .from(DISTRIBUTOR_SAMPLE_BUCKET)
+      .download(path);
+    if (downloadError) {
+      console.warn("Distributor format profile download failed", downloadError);
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(await data.text()) as DistributorFormatProfile;
+      if (parsed.active !== false && parsed.distributorName) profiles.push(parsed);
+    } catch (parseError) {
+      console.warn("Distributor format profile JSON parse failed", parseError);
+    }
+  }
+  return profiles;
+}
+
+async function findDistributorProfileRowByName(
+  userId: string,
+  distributorName: string,
+): Promise<DistributorFormatProfileRow | null> {
+  const { data, error } = await supabase
+    .from("distributor_format_profiles")
+    .select("*")
+    .eq("user_id", userId)
+    .ilike("distributor_name", distributorName)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+async function saveDistributorProfileToDatabase(
+  userId: string,
+  profile: DistributorFormatProfile,
+): Promise<void> {
+  const existing = await findDistributorProfileRowByName(userId, profile.distributorName);
+  const payload = {
+    user_id: userId,
+    distributor_name: profile.distributorName,
+    profile_name: profile.profileName || profile.distributorName,
+    source_sample_type: profile.sourceSampleType ?? "Manual",
+    source_sample_name: profile.sourceSampleName ?? null,
+    source_storage_path: profile.sourceStoragePath ?? null,
+    source_mime_type: profile.sourceMimeType ?? null,
+    source_file_size: profile.sourceFileSize ?? null,
+    uploaded_at: profile.uploadedAt ?? null,
+    numeric_order: profile.numericOrder,
+    source_headers: profile.sourceHeaders,
+    source_column_positions: profile.sourceColumnPositions,
+    manual_column_mappings: profile.manualColumnMappings ?? {},
+    header_row_rule: profile.headerRowRule,
+    product_row_rule: profile.productRowRule,
+    group_heading_rule: profile.groupHeadingRule,
+    group_total_rule: profile.groupTotalRule,
+    date_extraction_rule: profile.dateExtractionRule,
+    distributor_name_extraction_rule: profile.distributorNameExtractionRule ?? null,
+    column_mapping_rules: profile.columnMappingRules ?? null,
+    product_code_extraction_rule: profile.productCodeExtractionRule ?? null,
+    product_name_extraction_rule: profile.productNameExtractionRule ?? null,
+    multiline_product_name_rule: profile.multilineProductNameRule ?? null,
+    page_continuation_rule: profile.pageContinuationRule ?? null,
+    active: profile.active !== false,
+    updated_at: profile.lastUpdated,
+  };
+
+  if (existing) {
+    const { error } = await supabase
+      .from("distributor_format_profiles")
+      .update(payload)
+      .eq("id", existing.id);
+    if (error) throw error;
+    return;
+  }
+
+  const { error } = await supabase.from("distributor_format_profiles").insert({
+    ...payload,
+    created_at: profile.createdAt ?? profile.lastUpdated,
+  });
+  if (error) throw error;
+}
+
+async function saveDistributorProfileToStorage(
+  userId: string,
+  profile: DistributorFormatProfile,
+): Promise<void> {
+  const path = `${userId}/${DISTRIBUTOR_PROFILE_STORAGE_FOLDER}/${safeDistributorProfileName(
+    profile.distributorName,
+  )}.json`;
+  const blob = new Blob([JSON.stringify(profile, null, 2)], {
+    type: "application/json",
+  });
+  const { error } = await supabase.storage.from(DISTRIBUTOR_SAMPLE_BUCKET).upload(path, blob, {
+    cacheControl: "60",
+    upsert: true,
+    contentType: "application/json",
+  });
+  if (error) throw error;
+}
+
+async function deleteDistributorProfileFromDatabase(
+  profile: DistributorFormatProfile,
+): Promise<void> {
+  const { data: userResult, error: userError } = await supabase.auth.getUser();
+  if (userError) throw userError;
+  const userId = userResult.user?.id;
+  if (!userId) throw new Error("Not authenticated");
+
+  let row: DistributorFormatProfileRow | null = null;
+  try {
+    row = await findDistributorProfileRowByName(userId, profile.distributorName);
+  } catch (error) {
+    console.warn("Distributor format database lookup failed during delete", error);
+  }
+  if (row) {
+    const { error } = await supabase.from("distributor_format_profiles").delete().eq("id", row.id);
+    if (error) throw error;
+  }
+
+  const profileJsonPath = `${userId}/${DISTRIBUTOR_PROFILE_STORAGE_FOLDER}/${safeDistributorProfileName(
+    profile.distributorName,
+  )}.json`;
+  const pathsToRemove = [profileJsonPath];
+  if (row?.source_storage_path) pathsToRemove.push(row.source_storage_path);
+  else if (profile.sourceStoragePath) pathsToRemove.push(profile.sourceStoragePath);
+
+  if (pathsToRemove.length) {
+    const { error: removeError } = await supabase.storage
+      .from(DISTRIBUTOR_SAMPLE_BUCKET)
+      .remove(pathsToRemove);
+    if (removeError) console.warn("Distributor sample delete failed", removeError);
+  }
+}
+
+function distributorNumericLabel(key: DistributorNumericColumnKey): string {
+  return DISTRIBUTOR_NUMERIC_COLUMNS.find((column) => column.key === key)?.header ?? key;
+}
+
+function formatShortDate(value?: string): string {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleDateString();
+}
+
+function sanitizeDistributorNumericOrder(value: unknown): DistributorNumericColumnKey[] {
+  const allowed = new Set(DISTRIBUTOR_NUMERIC_COLUMNS.map((column) => column.key));
+  const raw = Array.isArray(value) ? value : [];
+  const seen = new Set<DistributorNumericColumnKey>();
+  const keys = raw.filter((key): key is DistributorNumericColumnKey => {
+    if (typeof key !== "string" || !allowed.has(key as DistributorNumericColumnKey)) return false;
+    if (seen.has(key as DistributorNumericColumnKey)) return false;
+    seen.add(key as DistributorNumericColumnKey);
+    return true;
+  });
+  return keys.length ? keys : DISTRIBUTOR_NUMERIC_COLUMNS.map((column) => column.key);
+}
+
 function openReportHistoryDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(REPORT_HISTORY_DB, 1);
@@ -5414,6 +7409,275 @@ function PreviewTable({
   );
 }
 
+function DistributorSalesPreviewTable({
+  rows,
+  onCellChange,
+}: {
+  rows: DistributorSalesRow[];
+  onCellChange: (rowIndex: number, key: keyof DistributorSalesRow, value: string) => void;
+}) {
+  if (!rows.length) {
+    return (
+      <div className="p-4 text-sm text-muted-foreground">
+        No product rows were extracted. Review the warnings above or try a clearer distributor PDF.
+      </div>
+    );
+  }
+
+  return (
+    <table className="min-w-max border-collapse text-xs">
+      <thead className="sticky top-0 z-10 bg-primary text-primary-foreground">
+        <tr>
+          {DISTRIBUTOR_SALES_COLUMNS.map((column) => (
+            <th
+              key={column.key}
+              className="min-w-32 border border-primary-foreground/30 px-2 py-2 text-left font-semibold"
+            >
+              {column.header}
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row, rowIndex) => (
+          <tr key={`${row.sourcePdfFileName}-${row.productCode}-${rowIndex}`}>
+            {DISTRIBUTOR_SALES_COLUMNS.map((column) => {
+              const value = row[column.key as keyof DistributorSalesRow];
+              return (
+                <td
+                  key={column.key}
+                  className="min-w-32 border border-border bg-card p-0 align-middle"
+                >
+                  <input
+                    className="min-h-8 w-full bg-transparent px-2 py-1 outline-none focus:bg-primary/10 focus:ring-1 focus:ring-primary"
+                    value={value ?? ""}
+                    onChange={(event) =>
+                      onCellChange(
+                        rowIndex,
+                        column.key as keyof DistributorSalesRow,
+                        event.target.value,
+                      )
+                    }
+                    aria-label={`${column.header} row ${rowIndex + 1}`}
+                  />
+                </td>
+              );
+            })}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function DistributorFormatExcelLayout({
+  profile,
+  editable = false,
+  onNumericOrderChange,
+}: {
+  profile: DistributorFormatProfile;
+  editable?: boolean;
+  onNumericOrderChange?: (columnIndex: number, key: DistributorNumericColumnKey) => void;
+}) {
+  const order = sanitizeDistributorNumericOrder(profile.numericOrder);
+  const sampleValues: Record<string, string> = {
+    productCode: "Code rule",
+    productName: "Product name rule",
+    tradePrice: "Rate",
+    openingQty: "Opening",
+    purchaseQty: "Receipt",
+    purchaseBonus: "Bns",
+    totalStock: "Total Stock",
+    salesQty: "Sales",
+    salesBonus: "Bns",
+    returnQty: "Return",
+    returnBonus: "Bns",
+    netSaleQty: "Net Qty",
+    netSaleBonus: "Net Bns",
+    netSaleValue: "Sale Value",
+    transferIn: "Transfer In",
+    transferOut: "Transfer Out",
+    closingQty: "Closing",
+    closingValue: "Stock Value",
+    todaySales: "Today",
+    previousMonthSalesQty: "Previous",
+    varianceQty: "Variance",
+    variancePercent: "Per%",
+  };
+
+  const numericHeaders = DISTRIBUTOR_NUMERIC_COLUMNS.map((column) => column.key);
+
+  return (
+    <div className="overflow-auto rounded-md border border-border bg-background">
+      <div className="min-w-[980px]">
+        <div className="border-b border-border bg-card px-3 py-2 text-center text-sm font-bold uppercase text-foreground">
+          {profile.distributorName || "Distributor Name"}
+        </div>
+        <div className="grid grid-cols-2 border-b border-border text-xs font-semibold text-foreground">
+          <div className="border-r border-border px-3 py-2">
+            FROM DATE: {profile.dateExtractionRule}
+          </div>
+          <div className="px-3 py-2">TO DATE: {profile.dateExtractionRule}</div>
+        </div>
+        <div className="border-b border-border bg-yellow-100 px-3 py-2 text-xs font-bold text-slate-900">
+          Group: {profile.groupHeadingRule || "Group heading rule"}
+        </div>
+        <table className="w-full border-collapse text-xs">
+          <thead>
+            <tr className="bg-primary text-primary-foreground">
+              {[
+                "Sr#",
+                "Product Code",
+                "Product Name",
+                ...DISTRIBUTOR_NUMERIC_COLUMNS.map((c) => c.header),
+              ].map((header) => (
+                <th
+                  key={header}
+                  className="border border-primary-foreground/30 px-2 py-2 text-left"
+                >
+                  {header}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td className="border border-border px-2 py-2">1</td>
+              <td className="border border-border px-2 py-2">
+                {profile.productCodeExtractionRule || "Product code"}
+              </td>
+              <td className="border border-border px-2 py-2">
+                {profile.productNameExtractionRule || "Product name"}
+              </td>
+              {numericHeaders.map((key, index) => (
+                <td key={key} className="border border-border px-2 py-2 align-top">
+                  {editable ? (
+                    <select
+                      value={order[index] ?? key}
+                      onChange={(event) =>
+                        onNumericOrderChange?.(
+                          index,
+                          event.target.value as DistributorNumericColumnKey,
+                        )
+                      }
+                      className="w-36 rounded border border-border bg-background px-2 py-1"
+                    >
+                      {DISTRIBUTOR_NUMERIC_COLUMNS.map((column) => (
+                        <option key={column.key} value={column.key}>
+                          {column.header}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    sampleValues[order[index] ?? key] ||
+                    distributorNumericLabel(order[index] ?? key)
+                  )}
+                </td>
+              ))}
+            </tr>
+            <tr className="bg-muted/60 font-semibold">
+              <td className="border border-border px-2 py-2" />
+              <td className="border border-border px-2 py-2" />
+              <td className="border border-border px-2 py-2">Group Total</td>
+              {numericHeaders.map((key) => (
+                <td key={key} className="border border-border px-2 py-2">
+                  {profile.groupTotalRule || "Total mapping"}
+                </td>
+              ))}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function DistributorProfileField({
+  label,
+  value,
+  onChange,
+  multiline = false,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  multiline?: boolean;
+}) {
+  return (
+    <label className="block text-sm">
+      <span className="mb-1 block font-semibold text-foreground">{label}</span>
+      {multiline ? (
+        <textarea
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          className="min-h-20 w-full rounded-md border border-border bg-background px-3 py-2 outline-none focus:ring-2 focus:ring-primary/30"
+        />
+      ) : (
+        <input
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          className="h-10 w-full rounded-md border border-border bg-background px-3 outline-none focus:ring-2 focus:ring-primary/30"
+        />
+      )}
+    </label>
+  );
+}
+
+function ManualDistributorMappings({
+  mappings,
+  onChange,
+}: {
+  mappings: Record<string, string>;
+  onChange: (key: string, value: string) => void;
+}) {
+  return (
+    <div className="rounded-md border border-border bg-background/60 p-3">
+      <div className="text-xs font-bold uppercase text-primary">Manual column mapping</div>
+      <p className="mt-1 text-sm text-muted-foreground">
+        Select a known PDF header or type a custom header for each standard Excel column.
+      </p>
+      <div className="mt-3 grid max-h-80 gap-3 overflow-y-auto pr-1 sm:grid-cols-2">
+        {MANUAL_DISTRIBUTOR_MAPPING_FIELDS.map((field) => (
+          <div key={field} className="rounded-md border border-border bg-card p-2">
+            <div className="text-xs font-semibold text-foreground">{field}</div>
+            <select
+              value={
+                MANUAL_DISTRIBUTOR_HEADER_OPTIONS.includes(mappings[field] ?? "")
+                  ? (mappings[field] ?? "")
+                  : ""
+              }
+              onChange={(event) => onChange(field, event.target.value)}
+              className="mt-2 h-9 w-full rounded-md border border-border bg-background px-2 text-sm outline-none focus:ring-2 focus:ring-primary/30"
+            >
+              <option value="">Select PDF header</option>
+              {MANUAL_DISTRIBUTOR_HEADER_OPTIONS.filter(Boolean).map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+            <input
+              value={mappings[field] ?? ""}
+              onChange={(event) => onChange(field, event.target.value)}
+              placeholder="Or type custom header"
+              className="mt-2 h-9 w-full rounded-md border border-border bg-background px-2 text-sm outline-none focus:ring-2 focus:ring-primary/30"
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ProfileDetail({ label, value }: { label: string; value?: string }) {
+  return (
+    <div className="rounded-md border border-border bg-background/60 p-3">
+      <div className="text-xs font-bold uppercase text-primary">{label}</div>
+      <div className="mt-1 whitespace-pre-wrap text-sm text-foreground">{value || "-"}</div>
+    </div>
+  );
+}
+
 function UploadCard({
   step,
   title,
@@ -5422,6 +7686,7 @@ function UploadCard({
   ready = false,
   onClick,
   children,
+  compact = false,
 }: {
   step: number;
   title: string;
@@ -5432,10 +7697,15 @@ function UploadCard({
   ready?: boolean;
   onClick: () => void;
   children: React.ReactNode;
+  compact?: boolean;
 }) {
   return (
-    <Card className="flex min-h-[16rem] flex-col border-white/45 bg-[var(--gradient-card)] p-4 shadow-[var(--shadow-soft)] transition-shadow hover:shadow-[var(--shadow-elegant)] sm:p-5">
-      <div className="mb-4 space-y-4">
+    <Card
+      className={`flex flex-col border-white/45 bg-[var(--gradient-card)] shadow-[var(--shadow-soft)] transition-shadow hover:shadow-[var(--shadow-elegant)] ${
+        compact ? "h-[22rem] p-4" : "min-h-[16rem] p-4 sm:p-5"
+      }`}
+    >
+      <div className={compact ? "mb-3 space-y-3" : "mb-4 space-y-4"}>
         <div className="flex items-start justify-between gap-3">
           <div className="flex min-h-9 items-center gap-2 text-xs font-bold uppercase text-primary">
             Step {step}
@@ -5452,13 +7722,25 @@ function UploadCard({
           </Button>
         </div>
         <div className="min-w-0">
-          <h2 className="flex min-w-0 items-start gap-3 text-base font-semibold leading-tight text-foreground sm:text-lg 2xl:text-xl">
-            <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-card text-primary shadow-[var(--shadow-inset)]">
+          <h2
+            className={`flex min-w-0 items-start gap-3 font-semibold leading-tight text-foreground ${
+              compact ? "text-base sm:text-lg" : "text-base sm:text-lg 2xl:text-xl"
+            }`}
+          >
+            <span
+              className={`mt-0.5 flex shrink-0 items-center justify-center rounded-xl bg-card text-primary shadow-[var(--shadow-inset)] ${
+                compact ? "h-8 w-8" : "h-9 w-9"
+              }`}
+            >
               {icon}
             </span>
             <span className="min-w-0 whitespace-normal break-words">{title}</span>
           </h2>
-          <p className="mt-2 max-w-[28rem] text-sm leading-relaxed text-muted-foreground sm:text-base">
+          <p
+            className={`mt-2 max-w-[28rem] text-sm leading-relaxed text-muted-foreground ${
+              compact ? "" : "sm:text-base"
+            }`}
+          >
             {subtitle}
           </p>
         </div>
@@ -5474,7 +7756,9 @@ function UploadCard({
             onClick();
           }
         }}
-        className={`report-card-scroll mt-auto min-h-28 max-h-52 overflow-y-auto rounded-2xl border p-3 shadow-[var(--shadow-inset)] transition sm:min-h-32 ${
+        className={`report-card-scroll mt-auto overflow-y-auto rounded-2xl border shadow-[var(--shadow-inset)] transition ${
+          compact ? "h-[115px] max-h-[115px] p-5" : "min-h-28 max-h-52 p-3 sm:min-h-32"
+        } ${
           ready ? "border-success/35 bg-success/5" : "border-white/40 bg-muted/35"
         } ${ready ? "" : "cursor-pointer hover:border-primary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"}`}
       >
