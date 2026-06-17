@@ -94,6 +94,7 @@ export type DistributorNumericColumnKey = Extract<
 >;
 
 export interface DistributorFormatProfile {
+  id?: string;
   distributorName: string;
   profileName: string;
   sourceSampleType?: "PDF" | "Excel" | "Screenshot" | "Manual";
@@ -120,10 +121,12 @@ export interface DistributorFormatProfile {
   createdAt?: string;
   lastUpdated: string;
   active: boolean;
+  deletedAt?: string | null;
 }
 
 export interface ProcessDistributorSalesOptions {
   profiles?: DistributorFormatProfile[];
+  selectedProfileId?: string;
 }
 
 type PdfJs = typeof import("pdfjs-dist");
@@ -518,8 +521,13 @@ export async function processDistributorSalesPdfs(
 
   for (const file of files) {
     try {
-      const parsed = await parseDistributorPdf(file, options.profiles ?? []);
-      rows.push(...parsed.rows);
+      const parsed = await parseDistributorPdf(
+        file,
+        options.profiles ?? [],
+        options.selectedProfileId,
+      );
+      const normalized = normalizeDistributorRowsForOutput(parsed.rows, parsed.summary.warnings);
+      rows.push(...normalized);
       summaries.push(parsed.summary);
       warnings.push(...parsed.summary.warnings.map((warning) => `${file.name}: ${warning}`));
     } catch (error) {
@@ -548,6 +556,7 @@ export async function processDistributorSalesPdfs(
 async function parseDistributorPdf(
   file: File,
   profiles: DistributorFormatProfile[],
+  selectedProfileId?: string,
 ): Promise<{
   rows: DistributorSalesRow[];
   summary: DistributorFileSummary;
@@ -581,10 +590,14 @@ async function parseDistributorPdf(
   const availableBuiltInProfiles = BUILT_IN_DISTRIBUTOR_PROFILES.filter(
     (profile) => !inactiveProfileNames.has(normalizeProfileName(profile.distributorName)),
   );
-  const savedProfile = findDistributorProfile(
+  const selectedProfile = selectedProfileId
+    ? [...profiles, ...availableBuiltInProfiles].find((profile) => profile.id === selectedProfileId)
+    : undefined;
+  const matchedProfile = findDistributorProfile(
     [...profiles, ...availableBuiltInProfiles],
     distributorName,
   );
+  const savedProfile = selectedProfile ?? matchedProfile;
   const detectedNumericOrder = header ? detectNumericOrder(header) : [];
   const activeNumericOrder = sanitizeNumericOrder(
     savedProfile?.numericOrder?.length
@@ -605,8 +618,18 @@ async function parseDistributorPdf(
   if (!fromDate) warnings.push("From Date was not detected confidently and was left blank.");
   if (!toDate) warnings.push("To Date was not detected confidently and was left blank.");
   if (!savedProfile) {
-    warnings.push("No saved format found; using auto-detected distributor sales mapping.");
+    warnings.push(
+      "No saved format found for this distributor. Please select or add correct distributor format.",
+    );
     if (detectedNumericOrder.length < 8 && !header) warnings.push(UNRECOGNIZED_FORMAT_WARNING);
+  }
+  if (
+    selectedProfile &&
+    normalizeProfileName(selectedProfile.distributorName) !== normalizeProfileName(distributorName)
+  ) {
+    warnings.push(
+      "Selected format does not match detected distributor. Please confirm before generating.",
+    );
   }
 
   if (isAminTradersFormat(rawText, distributorName, savedProfile)) {
@@ -1170,6 +1193,9 @@ function rowFromLine(
     base.productCode = parsed.productCode;
     base.productName = parsed.productName;
     applyParsedNumbers(base, parsed.numbers, numericOrder);
+    if (parsed.numbers.length < numericOrder.length) {
+      remarks.push("Some values were not detected and were set to 0.00.");
+    }
   }
 
   if (!base.productCode || !base.productName) return null;
@@ -1216,18 +1242,27 @@ function parseProductLine(text: string): ParsedProductLine | null {
   const productCode = codeMatch[1];
   const rest = codeMatch[2];
   const numericMatches = [...rest.matchAll(/-?\d[\d,]*(?:\.\d+)?%?/g)];
-  const tradePriceMatch =
-    numericMatches.find((match) => {
-      const value = match[0];
-      const index = match.index ?? 0;
-      const previous = rest[index - 1] ?? " ";
-      const next = rest[index + value.length] ?? " ";
-      return value.includes(".") && !/[A-Za-z]/.test(previous) && !/[A-Za-z]/.test(next);
-    }) ?? numericMatches.find((match) => (match.index ?? 0) > 0);
-  if (!tradePriceMatch) return null;
+  const tradePriceMatch = numericMatches.find((match) => {
+    const value = match[0];
+    const index = match.index ?? 0;
+    const previous = rest[index - 1] ?? " ";
+    const next = rest[index + value.length] ?? " ";
+    return value.includes(".") && !/[A-Za-z]/.test(previous) && !/[A-Za-z]/.test(next);
+  });
+
+  if (!tradePriceMatch) {
+    const numericTail = rest.match(/\s(?:-?\d[\d,]*(?:\.\d+)?%?\s*){2,}$/);
+    if (!numericTail || numericTail.index === undefined) return null;
+    const productName = cleanProductName(rest.slice(0, numericTail.index));
+    if (!productName || productName.length < 2) return null;
+    const numbers = [...rest.slice(numericTail.index).matchAll(/-?\d[\d,]*(?:\.\d+)?%?/g)]
+      .map((match) => Number(match[0].replace(/,/g, "").replace("%", "")))
+      .filter((value) => Number.isFinite(value));
+    return { productCode, productName, numbers: [0, ...numbers] };
+  }
 
   const tradePriceIndex = tradePriceMatch.index ?? rest.length;
-  const productName = cleanText(rest.slice(0, tradePriceIndex));
+  const productName = cleanProductName(rest.slice(0, tradePriceIndex));
   if (!productName || productName.length < 2) return null;
 
   const numbers = [...rest.slice(tradePriceIndex).matchAll(/-?\d[\d,]*(?:\.\d+)?%?/g)]
@@ -1270,30 +1305,30 @@ function blankRow(
     toDate: meta.toDate,
     productCode: "",
     productName: "",
-    tradePrice: "",
-    openingQty: "",
-    openingValue: "",
-    purchaseQty: "",
-    purchaseBonus: "",
-    purchaseValue: "",
-    totalStock: "",
-    salesQty: "",
-    salesBonus: "",
-    returnQty: "",
-    returnBonus: "",
-    netSaleQty: "",
-    netSaleBonus: "",
-    netSaleValue: "",
-    transferIn: "",
-    transferOut: "",
-    closingQty: "",
-    closingBonus: "",
-    closingValue: "",
-    todaySales: "",
-    previousMonthSalesQty: "",
-    previousMonthSalesValue: "",
-    varianceQty: "",
-    variancePercent: "",
+    tradePrice: 0,
+    openingQty: 0,
+    openingValue: 0,
+    purchaseQty: 0,
+    purchaseBonus: 0,
+    purchaseValue: 0,
+    totalStock: 0,
+    salesQty: 0,
+    salesBonus: 0,
+    returnQty: 0,
+    returnBonus: 0,
+    netSaleQty: 0,
+    netSaleBonus: 0,
+    netSaleValue: 0,
+    transferIn: 0,
+    transferOut: 0,
+    closingQty: 0,
+    closingBonus: 0,
+    closingValue: 0,
+    todaySales: 0,
+    previousMonthSalesQty: 0,
+    previousMonthSalesValue: 0,
+    varianceQty: 0,
+    variancePercent: 0,
     sourcePdfFileName: meta.sourcePdfFileName,
     remarksWarnings: "",
   };
@@ -1403,7 +1438,10 @@ function rowsFromTextFallback(
       row.productCode = parsed.productCode;
       row.productName = parsed.productName;
       applyParsedNumbers(row, parsed.numbers, FALLBACK_NUMERIC_ORDER);
-      row.remarksWarnings = "Parsed with text-row fallback.";
+      row.remarksWarnings =
+        parsed.numbers.length < FALLBACK_NUMERIC_ORDER.length
+          ? "Parsed with text-row fallback. Some values were not detected and were set to 0.00."
+          : "Parsed with text-row fallback.";
       rows.push(row);
       lastProductRow = row;
       continue;
@@ -1472,6 +1510,101 @@ function parseNumber(value: string): number | "" {
   return clean ? Number(clean[0]) : "";
 }
 
+function normalizeDistributorRowsForOutput(
+  rows: DistributorSalesRow[],
+  warnings: string[],
+): DistributorSalesRow[] {
+  const normalizedProducts: DistributorSalesRow[] = [];
+  let replacedNumericValue = false;
+  let cleanedProductName = false;
+  let replacedPdfGroupTotal = false;
+
+  for (const row of rows) {
+    if (row.rowType === "groupTotal") {
+      replacedPdfGroupTotal = true;
+      continue;
+    }
+
+    const normalized = normalizeDistributorProductRow(row);
+    if (normalized.__replacedNumericValue) replacedNumericValue = true;
+    if (normalized.__cleanedProductName) cleanedProductName = true;
+    normalizedProducts.push(normalized.row);
+  }
+
+  const outputRows: DistributorSalesRow[] = [];
+  const groups = groupRowsForExport(normalizedProducts);
+  for (const [groupName, groupRows] of groups.entries()) {
+    outputRows.push(...groupRows);
+    outputRows.push(calculateGroupTotal(groupName, groupRows, groupRows[0]));
+  }
+
+  if (replacedNumericValue) {
+    pushUniqueWarning(warnings, "Some values were not detected and were set to 0.00.");
+  }
+  if (cleanedProductName) {
+    pushUniqueWarning(
+      warnings,
+      "Extra numeric values were removed from one or more product names.",
+    );
+  }
+  if (replacedPdfGroupTotal) {
+    pushUniqueWarning(warnings, "Group totals were calculated from product rows for safe export.");
+  }
+
+  return outputRows;
+}
+
+function normalizeDistributorProductRow(row: DistributorSalesRow): {
+  row: DistributorSalesRow;
+  __replacedNumericValue: boolean;
+  __cleanedProductName: boolean;
+} {
+  const next: DistributorSalesRow = { ...row, rowType: "product" };
+  const originalProductName = next.productName;
+  next.productCode = cleanProductCode(next.productCode);
+  next.productName = cleanProductName(next.productName);
+
+  let replacedNumericValue = false;
+  for (const key of TEMPLATE_NUMERIC_KEYS) {
+    const value = next[key];
+    if (typeof value === "number" && Number.isFinite(value)) continue;
+    next[key] = 0 as never;
+    replacedNumericValue = true;
+  }
+
+  const remarks = new Set(
+    next.remarksWarnings
+      .split(";")
+      .map((remark) => remark.trim())
+      .filter(Boolean),
+  );
+  if (replacedNumericValue) remarks.add("Some values were not detected and were set to 0.00.");
+  if (originalProductName !== next.productName) {
+    remarks.add("Extra numeric values were removed from product name.");
+  }
+  next.remarksWarnings = [...remarks].join("; ");
+
+  return {
+    row: next,
+    __replacedNumericValue: replacedNumericValue,
+    __cleanedProductName: originalProductName !== next.productName,
+  };
+}
+
+function cleanProductCode(value: string): string {
+  return cleanText(value).split(/\s+/)[0] ?? "";
+}
+
+function cleanProductName(value: string): string {
+  return cleanText(value)
+    .replace(/\s(?:-?\d[\d,]*(?:\.\d+)?%?\s*){2,}$/g, "")
+    .trim();
+}
+
+function pushUniqueWarning(warnings: string[], warning: string) {
+  if (!warnings.some((item) => item === warning)) warnings.push(warning);
+}
+
 function cleanText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
@@ -1489,8 +1622,9 @@ function columnHeader(key: keyof DistributorSalesRow | string): string {
 
 export async function exportDistributorSalesExcel(rows: DistributorSalesRow[]): Promise<Blob> {
   const wb = new ExcelJS.Workbook();
+  const safeRows = normalizeDistributorRowsForOutput(rows, []);
   const groups = new Map<string, DistributorSalesRow[]>();
-  for (const row of rows) {
+  for (const row of safeRows) {
     const key = row.distributorName || "Distributor Sales";
     groups.set(key, [...(groups.get(key) ?? []), row]);
   }
@@ -1618,8 +1752,7 @@ function buildTemplateSheet(
       writeTemplateDataRow(ws.getRow(outputRowNumber++), item, serial++);
     }
 
-    const detectedTotal = groupRows.find((row) => row.rowType === "groupTotal");
-    const totalRow = detectedTotal ?? calculateGroupTotal(groupName, productRows, rows[0]);
+    const totalRow = calculateGroupTotal(groupName, productRows, rows[0]);
     writeTemplateDataRow(ws.getRow(outputRowNumber++), totalRow, "");
     const excelTotalRow = ws.getRow(outputRowNumber - 1);
     excelTotalRow.getCell(2).value = "";

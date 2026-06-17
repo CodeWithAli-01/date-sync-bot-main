@@ -177,6 +177,9 @@ const DASHBOARD_LINES = [
 
 const DEFAULT_THEME_COLOR = "#0b6f6a";
 const DISTRIBUTOR_PROFILE_STORAGE_KEY = "distributor-sales-format-profiles";
+const DISTRIBUTOR_DELETED_PROFILE_STORAGE_KEY = "distributor-sales-deleted-format-profiles";
+const DISTRIBUTOR_FORMAT_DB = "distributor-sales-format-db";
+const DISTRIBUTOR_FORMAT_STORE = "distributor_formats";
 const DISTRIBUTOR_SAMPLE_BUCKET = "distributor-format-samples";
 const DISTRIBUTOR_PROFILE_STORAGE_FOLDER = "profiles";
 const THEME_COLORS = [
@@ -331,9 +334,8 @@ function HomePage() {
   } | null>(null);
   const [distributorReportPreviewOpen, setDistributorReportPreviewOpen] = useState(false);
   const [distributorSampleMappingOpen, setDistributorSampleMappingOpen] = useState(false);
-  const [distributorProfiles, setDistributorProfiles] = useState<DistributorFormatProfile[]>(() =>
-    readDistributorProfiles(),
-  );
+  const [distributorProfiles, setDistributorProfiles] = useState<DistributorFormatProfile[]>([]);
+  const [selectedDistributorFormatId, setSelectedDistributorFormatId] = useState("");
   const [distributorProfileSearch, setDistributorProfileSearch] = useState("");
   const [selectedDistributorProfile, setSelectedDistributorProfile] =
     useState<DistributorFormatProfile | null>(null);
@@ -351,6 +353,10 @@ function HomePage() {
   >(null);
   const [distributorSampleFormatName, setDistributorSampleFormatName] = useState("");
   const [distributorSampleFormatFile, setDistributorSampleFormatFile] = useState<File | null>(null);
+  const [selectedDistributorSampleFile, setSelectedDistributorSampleFile] = useState<File | null>(
+    null,
+  );
+  const [distributorSampleInputKey, setDistributorSampleInputKey] = useState(0);
   const [distributorManualDraft, setDistributorManualDraft] =
     useState<DistributorFormatProfile | null>(null);
   const [performanceDialogOpen, setPerformanceDialogOpen] = useState(false);
@@ -371,34 +377,22 @@ function HomePage() {
   const monthlyPlannedPreviewRef = useRef<HTMLDivElement>(null);
   const distributorInputRef = useRef<HTMLInputElement>(null);
 
-  const allDistributorProfiles = useMemo(() => {
-    const inactiveNames = new Set(
-      distributorProfiles
-        .filter((profile) => profile.active === false)
-        .map((profile) => profile.distributorName.trim().toLowerCase()),
-    );
-    const savedActiveNames = new Set(
-      distributorProfiles
-        .filter((profile) => profile.active !== false)
-        .map((profile) => profile.distributorName.trim().toLowerCase()),
-    );
-    return [
-      ...BUILT_IN_DISTRIBUTOR_PROFILES.filter(
-        (profile) =>
-          !inactiveNames.has(profile.distributorName.trim().toLowerCase()) &&
-          !savedActiveNames.has(profile.distributorName.trim().toLowerCase()),
-      ),
-      ...distributorProfiles.filter((profile) => profile.active !== false),
-    ];
-  }, [distributorProfiles]);
+  const savedDistributorProfiles = useMemo(
+    () => distributorProfiles.filter((profile) => profile.active !== false),
+    [distributorProfiles],
+  );
   const visibleDistributorProfiles = useMemo(() => {
     const query = distributorProfileSearch.trim().toLowerCase();
-    return allDistributorProfiles.filter((profile) => {
+    return savedDistributorProfiles.filter((profile) => {
       const source = profile.sourceSampleType ?? "Manual";
       const haystack = `${profile.distributorName} ${profile.profileName} ${source}`.toLowerCase();
       return query ? haystack.includes(query) : true;
     });
-  }, [allDistributorProfiles, distributorProfileSearch]);
+  }, [savedDistributorProfiles, distributorProfileSearch]);
+  const selectedDistributorFormat = useMemo(
+    () => savedDistributorProfiles.find((profile) => profile.id === selectedDistributorFormatId),
+    [savedDistributorProfiles, selectedDistributorFormatId],
+  );
   const clearDistributorGeneratedFile = useCallback(() => {
     setDistributorGeneratedFile((current) => {
       if (current) URL.revokeObjectURL(current.url);
@@ -542,26 +536,16 @@ function HomePage() {
   }, [authUser]);
 
   useEffect(() => {
-    if (!authUser) {
-      setDistributorProfiles(readDistributorProfiles());
-      return;
-    }
-
     let cancelled = false;
-    void loadDistributorProfilesFromDatabase()
+    void getDistributorFormats()
       .then((profiles) => {
         if (cancelled) return;
         setDistributorProfiles(profiles);
-        writeDistributorProfiles(profiles);
       })
       .catch((error) => {
         console.warn("Distributor format profile load failed", error);
         if (!cancelled) {
-          const message = error instanceof Error ? error.message : String(error);
-          if (!/distributor_format_profiles|schema cache|relation/i.test(message)) {
-            toast.error("Saved distributor formats could not be loaded. Using local cache.");
-          }
-          setDistributorProfiles(readDistributorProfiles());
+          toast.error("Saved distributor formats could not be loaded.");
         }
       });
 
@@ -569,6 +553,31 @@ function HomePage() {
       cancelled = true;
     };
   }, [authUser]);
+
+  useEffect(() => {
+    if (
+      !distributorFiles.length ||
+      !savedDistributorProfiles.length ||
+      selectedDistributorFormatId
+    ) {
+      return;
+    }
+
+    const fileText = distributorFiles.map((file) => file.name).join(" ");
+    const normalizedFileText = normalizeDistributorFormatName(fileText);
+    const exactFileMatch = savedDistributorProfiles.find((profile) => {
+      const normalizedName = normalizeDistributorFormatName(profile.distributorName);
+      const normalizedProfile = normalizeDistributorFormatName(profile.profileName);
+      return (
+        normalizedFileText.includes(normalizedName) ||
+        normalizedFileText.includes(normalizedProfile)
+      );
+    });
+
+    if (exactFileMatch?.id) {
+      setSelectedDistributorFormatId(exactFileMatch.id);
+    }
+  }, [distributorFiles, savedDistributorProfiles, selectedDistributorFormatId]);
 
   useEffect(() => {
     if (!authUser) {
@@ -1306,6 +1315,10 @@ function HomePage() {
       toast.error("Please upload distributor sales PDF file(s).");
       return;
     }
+    if (savedDistributorProfiles.length > 0 && !selectedDistributorFormatId) {
+      toast.error("Please select the correct saved distributor format before generating.");
+      return;
+    }
     setDistributorProcessing(true);
     setDistributorResult(null);
     clearDistributorGeneratedFile();
@@ -1314,6 +1327,7 @@ function HomePage() {
     try {
       const result = await processDistributorSalesPdfs(distributorFiles, {
         profiles: distributorProfiles,
+        selectedProfileId: selectedDistributorFormatId || undefined,
       });
       if (!result.rows.length) {
         setDistributorResult(result);
@@ -1337,20 +1351,25 @@ function HomePage() {
     }
   };
 
-  const saveDistributorMappings = () => {
+  const saveDistributorMappings = async () => {
     if (!distributorResult?.summaries.length) {
       toast.error("Generate a distributor preview before saving a mapping.");
       return;
     }
 
     const now = new Date().toISOString();
-    const nextProfiles = [...distributorProfiles];
     let savedCount = 0;
 
     for (const summary of distributorResult.summaries) {
       if (!summary.distributorName) continue;
       const numericOrder = sanitizeDistributorNumericOrder(summary.suggestedNumericOrder);
+      const existingProfile = distributorProfiles.find(
+        (item) =>
+          item.distributorName.trim().toLowerCase() ===
+          summary.distributorName.trim().toLowerCase(),
+      );
       const profile: DistributorFormatProfile = {
+        id: existingProfile?.id,
         distributorName: summary.distributorName,
         profileName: `${summary.distributorName} mapping`,
         sourceSampleType: "PDF",
@@ -1371,27 +1390,20 @@ function HomePage() {
         productNameExtractionRule: "Product name before the first mapped numeric value.",
         multilineProductNameRule: "Merge text continuation lines into previous product name.",
         pageContinuationRule: "Read all pages in order and continue current group across pages.",
-        createdAt:
-          nextProfiles.find(
-            (item) =>
-              item.distributorName.trim().toLowerCase() ===
-              summary.distributorName.trim().toLowerCase(),
-          )?.createdAt ?? now,
+        createdAt: existingProfile?.createdAt ?? now,
         lastUpdated: now,
         active: true,
       };
-      const existingIndex = nextProfiles.findIndex(
-        (item) =>
-          item.distributorName.trim().toLowerCase() ===
-          summary.distributorName.trim().toLowerCase(),
-      );
-      if (existingIndex >= 0) nextProfiles[existingIndex] = profile;
-      else nextProfiles.push(profile);
-      savedCount += 1;
+
+      try {
+        await saveDistributorFormat(profile);
+        savedCount += 1;
+      } catch (error) {
+        console.warn("Distributor mapping profile save failed", error);
+      }
     }
 
-    setDistributorProfiles(nextProfiles);
-    writeDistributorProfiles(nextProfiles);
+    setDistributorProfiles(await getDistributorFormats());
     toast.success(
       savedCount
         ? `${savedCount} distributor mapping profile(s) saved.`
@@ -1417,8 +1429,9 @@ function HomePage() {
       lastUpdated: now,
       active: selectedDistributorProfile.active !== false,
     };
-    if (await saveDistributorProfile(profile)) {
+    if (await saveDistributorProfile(profile, selectedDistributorSampleFile)) {
       setSelectedDistributorProfile(profile);
+      setSelectedDistributorSampleFile(null);
       setDistributorLargePanelMode("view");
     }
   };
@@ -1460,8 +1473,10 @@ function HomePage() {
   const resetDistributorAddForm = () => {
     setDistributorAddSourceType(null);
     setDistributorSampleFormatFile(null);
+    setSelectedDistributorSampleFile(null);
     setDistributorSampleFormatName("");
     setDistributorManualDraft(null);
+    setDistributorSampleInputKey((key) => key + 1);
   };
 
   const closeDistributorLargePanel = () => {
@@ -1493,8 +1508,10 @@ function HomePage() {
   const beginDistributorSampleFormat = (type: "PDF" | "Excel" | "Screenshot") => {
     setDistributorAddSourceType(type);
     setDistributorSampleFormatFile(null);
+    setSelectedDistributorSampleFile(null);
     setDistributorSampleFormatName("");
     setDistributorManualDraft(null);
+    setDistributorSampleInputKey((key) => key + 1);
   };
 
   const beginManualDistributorFormat = () => {
@@ -1505,7 +1522,9 @@ function HomePage() {
     });
     setDistributorAddSourceType(null);
     setDistributorSampleFormatFile(null);
+    setSelectedDistributorSampleFile(null);
     setDistributorSampleFormatName("");
+    setDistributorSampleInputKey((key) => key + 1);
   };
 
   const uploadDistributorSampleFile = async (
@@ -1543,11 +1562,7 @@ function HomePage() {
       toast.error("Distributor name is required.");
       return false;
     }
-    if (!authUser) {
-      toast.error("Distributor format could not be saved. Please sign in and try again.");
-      return false;
-    }
-
+    forgetDeletedDistributorProfile(name);
     const existingProfile = distributorProfiles.find(
       (item) => item.distributorName.trim().toLowerCase() === name.toLowerCase(),
     );
@@ -1562,24 +1577,33 @@ function HomePage() {
     }
 
     const now = new Date().toISOString();
+    const profileId = existingProfile?.id ?? profile.id ?? crypto.randomUUID();
     let uploadedSample: Partial<DistributorFormatProfile> = {};
     if (sampleFile) {
+      uploadedSample = {
+        sourceSampleName: sampleFile.name,
+        sourceStoragePath: buildDistributorSampleStorageKey(profileId, name, sampleFile),
+        sourceMimeType: sampleFile.type || undefined,
+        sourceFileSize: sampleFile.size,
+        uploadedAt: now,
+      };
+    }
+    if (sampleFile && authUser) {
       try {
-        uploadedSample = await uploadDistributorSampleFile(name, sampleFile);
+        uploadedSample = {
+          ...uploadedSample,
+          ...(await uploadDistributorSampleFile(name, sampleFile)),
+          sourceSampleName: sampleFile.name,
+        };
       } catch (uploadError) {
         console.warn("Distributor sample upload failed; saving metadata locally.", uploadError);
-        uploadedSample = {
-          sourceSampleName: sampleFile.name,
-          sourceMimeType: sampleFile.type || undefined,
-          sourceFileSize: sampleFile.size,
-          uploadedAt: now,
-        };
       }
     }
 
     const nextProfile: DistributorFormatProfile = {
       ...profile,
       ...uploadedSample,
+      id: profileId,
       distributorName: name,
       profileName: profile.profileName.trim() || name,
       numericOrder: sanitizeDistributorNumericOrder(profile.numericOrder),
@@ -1588,41 +1612,34 @@ function HomePage() {
       createdAt: existingProfile?.createdAt ?? profile.createdAt ?? now,
       lastUpdated: now,
       active: true,
+      deletedAt: null,
     };
 
     try {
-      await saveDistributorProfileToDatabase(authUser.id, nextProfile);
-      const nextProfiles = await loadDistributorProfilesFromDatabase();
+      await saveDistributorFormat(nextProfile, sampleFile ?? null);
+      const nextProfiles = await getDistributorFormats();
       setDistributorProfiles(nextProfiles);
-      writeDistributorProfiles(nextProfiles);
       setDistributorFormatPanel(null);
       setDistributorLargePanelMode("search");
-      toast.success("Distributor format saved successfully.");
+      toast.success("Distributor format saved successfully.", {
+        description: nextProfile.sourceSampleName
+          ? `${nextProfile.distributorName} - ${nextProfile.sourceSampleName} (${formatBytes(
+              nextProfile.sourceFileSize,
+            )})`
+          : nextProfile.distributorName,
+      });
+
+      if (authUser) {
+        void saveDistributorProfileToDatabase(authUser.id, nextProfile).catch((error) => {
+          console.warn("Distributor format Supabase sync failed after IndexedDB save", error);
+        });
+      }
+
       return true;
     } catch (error) {
-      console.warn("Distributor format database save failed; trying storage fallback.", error);
-      try {
-        await saveDistributorProfileToStorage(authUser.id, nextProfile);
-        const nextProfiles = await loadDistributorProfilesFromStorage(authUser.id);
-        setDistributorProfiles(nextProfiles);
-        writeDistributorProfiles(nextProfiles);
-        setDistributorFormatPanel(null);
-        setDistributorLargePanelMode("search");
-        toast.success("Distributor format saved successfully.");
-        return true;
-      } catch (fallbackError) {
-        console.error("Distributor format save failed", fallbackError);
-        const nextProfiles = distributorProfiles.filter(
-          (item) => item.distributorName.trim().toLowerCase() !== name.toLowerCase(),
-        );
-        nextProfiles.push(nextProfile);
-        setDistributorProfiles(nextProfiles);
-        writeDistributorProfiles(nextProfiles);
-        setDistributorFormatPanel(null);
-        setDistributorLargePanelMode("search");
-        toast.warning("Distributor format saved locally. Supabase save is not available yet.");
-        return true;
-      }
+      console.error("Distributor format IndexedDB save failed", error);
+      toast.error("Distributor format could not be saved. Please try again.");
+      return false;
     }
   };
 
@@ -1659,7 +1676,7 @@ function HomePage() {
       productNameExtractionRule: "Use saved sample mapping reference.",
       multilineProductNameRule: "Use saved sample mapping reference.",
       pageContinuationRule: "Use saved sample mapping reference.",
-      createdAt: existingProfile?.createdAt ?? now,
+      createdAt: now,
       lastUpdated: now,
       active: true,
     };
@@ -1700,9 +1717,20 @@ function HomePage() {
 
   const updateSelectedDistributorSample = (file: File | null) => {
     if (!selectedDistributorProfile || !file) return;
+    const profileId = selectedDistributorProfile.id ?? crypto.randomUUID();
+    setSelectedDistributorSampleFile(file);
     setSelectedDistributorProfile({
       ...selectedDistributorProfile,
+      id: profileId,
       sourceSampleName: file.name,
+      sourceStoragePath: buildDistributorSampleStorageKey(
+        profileId,
+        selectedDistributorProfile.distributorName || selectedDistributorProfile.profileName,
+        file,
+      ),
+      sourceMimeType: file.type || undefined,
+      sourceFileSize: file.size,
+      uploadedAt: new Date().toISOString(),
       sourceHeaders:
         selectedDistributorProfile.sourceSampleType === "PDF"
           ? ["Detected from PDF sample after upload"]
@@ -1722,23 +1750,23 @@ function HomePage() {
     try {
       if (!window.confirm("Are you sure you want to delete this distributor format?")) return;
       const name = profile.distributorName.trim().toLowerCase();
-      const isBuiltIn = BUILT_IN_DISTRIBUTOR_PROFILES.some(
-        (item) => item.distributorName.trim().toLowerCase() === name,
-      );
 
-      let nextProfiles = distributorProfiles.filter(
-        (item) => item.distributorName.trim().toLowerCase() !== name,
-      );
-      if (isBuiltIn) {
-        nextProfiles.push({
-          ...profile,
-          active: false,
-          lastUpdated: new Date().toISOString(),
+      await deleteDistributorFormat(profile.id ?? profile.distributorName);
+      rememberDeletedDistributorProfile(profile.distributorName);
+
+      if (authUser) {
+        void deleteDistributorProfileFromDatabase(profile).catch((error) => {
+          console.warn(
+            "Distributor format Supabase delete sync failed after IndexedDB delete",
+            error,
+          );
         });
       }
 
+      const nextProfiles = (await getDistributorFormats()).filter(
+        (item) => item.distributorName.trim().toLowerCase() !== name,
+      );
       setDistributorProfiles(nextProfiles);
-      writeDistributorProfiles(nextProfiles);
 
       if (selectedDistributorProfile?.distributorName.trim().toLowerCase() === name) {
         setSelectedDistributorProfile(null);
@@ -1746,36 +1774,10 @@ function HomePage() {
         setDistributorLargePanelMode("search");
       }
 
-      if (authUser) {
-        try {
-          await deleteDistributorProfileFromDatabase(profile);
-          const databaseProfiles = await loadDistributorProfilesFromDatabase();
-          nextProfiles = isBuiltIn
-            ? [
-                ...databaseProfiles.filter(
-                  (item) => item.distributorName.trim().toLowerCase() !== name,
-                ),
-                {
-                  ...profile,
-                  active: false,
-                  lastUpdated: new Date().toISOString(),
-                },
-              ]
-            : databaseProfiles;
-          setDistributorProfiles(nextProfiles);
-          writeDistributorProfiles(nextProfiles);
-        } catch (databaseError) {
-          console.warn(
-            "Distributor format database delete failed; kept local deletion.",
-            databaseError,
-          );
-        }
-      }
-
-      toast.success("Distributor format deleted.");
+      toast.success("Distributor format deleted successfully.");
     } catch (error) {
       console.error("Distributor format delete failed", error);
-      toast.error("Unable to delete this distributor format.");
+      toast.error("Distributor format could not be deleted. Please try again.");
     }
   };
 
@@ -3087,6 +3089,7 @@ function HomePage() {
                           {selectedDistributorProfile.sourceSampleName ||
                             `Choose ${selectedDistributorProfile.sourceSampleType?.toLowerCase()} sample`}
                           <input
+                            key={`edit-${selectedDistributorProfile.id ?? selectedDistributorProfile.distributorName}-${distributorSampleInputKey}`}
                             type="file"
                             className="hidden"
                             accept={
@@ -3300,7 +3303,7 @@ function HomePage() {
                     </h2>
                     <p className="mt-1 text-sm text-muted-foreground">
                       {distributorLargePanelMode === "search"
-                        ? `Showing ${visibleDistributorProfiles.length} of ${allDistributorProfiles.length} saved format(s).`
+                        ? `Showing ${visibleDistributorProfiles.length} of ${savedDistributorProfiles.length} saved format(s).`
                         : "Manage distributor format settings in a wider, readable workspace."}
                     </p>
                   </div>
@@ -3380,6 +3383,7 @@ function HomePage() {
                               : "Image files only"}
                         </span>
                         <input
+                          key={distributorSampleInputKey}
                           type="file"
                           className="hidden"
                           accept={
@@ -3479,6 +3483,14 @@ function HomePage() {
                           <div className="min-w-0 truncate text-base font-semibold text-foreground">
                             {profile.distributorName}
                           </div>
+                          <div className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+                            <div className="truncate">
+                              File: {profile.sourceSampleName || "No sample file"}
+                            </div>
+                            <div className="truncate">
+                              Ref: {profile.sourceStoragePath || "No file reference"}
+                            </div>
+                          </div>
                           <div className="mt-3 flex flex-wrap gap-2">
                             <Button
                               variant="secondary"
@@ -3538,6 +3550,18 @@ function HomePage() {
                             ? ` - ${selectedDistributorProfile.sourceSampleName}`
                             : ""
                         }`}
+                      />
+                      <ProfileDetail
+                        label="Original File Name"
+                        value={selectedDistributorProfile.sourceSampleName}
+                      />
+                      <ProfileDetail
+                        label="File Size"
+                        value={formatBytes(selectedDistributorProfile.sourceFileSize)}
+                      />
+                      <ProfileDetail
+                        label="Saved File Reference"
+                        value={selectedDistributorProfile.sourceStoragePath}
                       />
                       <ProfileDetail
                         label="Last Updated"
@@ -3656,6 +3680,7 @@ function HomePage() {
                       file.name.toLowerCase().endsWith(".pdf"),
                     );
                     setDistributorFiles(files);
+                    setSelectedDistributorFormatId("");
                     setDistributorResult(null);
                     clearDistributorGeneratedFile();
                     setDistributorReportPreviewOpen(false);
@@ -3667,6 +3692,7 @@ function HomePage() {
                     files={distributorFiles}
                     onClear={() => {
                       setDistributorFiles([]);
+                      setSelectedDistributorFormatId("");
                       setDistributorResult(null);
                       clearDistributorGeneratedFile();
                       setDistributorReportPreviewOpen(false);
@@ -3675,6 +3701,7 @@ function HomePage() {
                     }}
                     onRemove={(file) => {
                       setDistributorFiles((files) => files.filter((item) => item !== file));
+                      setSelectedDistributorFormatId("");
                       setDistributorResult(null);
                       clearDistributorGeneratedFile();
                       setDistributorReportPreviewOpen(false);
@@ -3695,7 +3722,7 @@ function HomePage() {
                     Add new distributor format or search saved distributor formats.
                   </p>
                   <div className="mt-2 rounded-md border border-border bg-background/60 px-3 py-1.5 text-sm font-semibold text-foreground">
-                    Saved Formats: {allDistributorProfiles.length}
+                    Saved Formats: {savedDistributorProfiles.length}
                   </div>
                 </div>
                 <div className="mt-3 grid gap-2">
@@ -3726,6 +3753,40 @@ function HomePage() {
                   <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
                     Generate the distributor sales Excel after selecting PDF files.
                   </p>
+                  <label className="mt-4 block max-w-md text-sm font-semibold text-foreground">
+                    Select Distributor Format
+                    <select
+                      value={selectedDistributorFormatId}
+                      onChange={(event) => {
+                        setSelectedDistributorFormatId(event.target.value);
+                        setDistributorResult(null);
+                        clearDistributorGeneratedFile();
+                        setDistributorReportPreviewOpen(false);
+                        setDistributorSampleMappingOpen(false);
+                      }}
+                      className="mt-2 h-11 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-primary/30"
+                    >
+                      <option value="">Select saved distributor format</option>
+                      {savedDistributorProfiles.map((profile) => (
+                        <option
+                          key={profile.id ?? profile.distributorName}
+                          value={profile.id ?? ""}
+                        >
+                          {profile.distributorName}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {selectedDistributorFormat && (
+                    <div className="mt-2 max-w-md rounded-md border border-border bg-background/60 px-3 py-2 text-xs text-muted-foreground">
+                      Using{" "}
+                      {selectedDistributorFormat.profileName ||
+                        selectedDistributorFormat.distributorName}
+                      {selectedDistributorFormat.sourceSampleName
+                        ? ` - ${selectedDistributorFormat.sourceSampleName}`
+                        : ""}
+                    </div>
+                  )}
                 </div>
                 <Button
                   size="lg"
@@ -6483,18 +6544,249 @@ function clearReportHistoryCache(userId: string) {
   window.localStorage.removeItem(reportHistoryCacheKey(userId));
 }
 
+interface DistributorFormatIndexedRecord extends DistributorFormatProfile {
+  id: string;
+  isActive: boolean;
+  deletedAt: string | null;
+  sourceFileBlob?: Blob | null;
+}
+
+function openDistributorFormatDb(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DISTRIBUTOR_FORMAT_DB, 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(DISTRIBUTOR_FORMAT_STORE)) {
+        const store = db.createObjectStore(DISTRIBUTOR_FORMAT_STORE, { keyPath: "id" });
+        store.createIndex("distributorName", "distributorName", { unique: false });
+        store.createIndex("isActive", "isActive", { unique: false });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error ?? new Error("Unable to open distributor DB."));
+  });
+}
+
+function distributorStoreTransaction(
+  mode: IDBTransactionMode,
+): Promise<{ db: IDBDatabase; transaction: IDBTransaction; store: IDBObjectStore }> {
+  return openDistributorFormatDb().then((db) => {
+    const transaction = db.transaction(DISTRIBUTOR_FORMAT_STORE, mode);
+    return {
+      db,
+      transaction,
+      store: transaction.objectStore(DISTRIBUTOR_FORMAT_STORE),
+    };
+  });
+}
+
+async function migrateLegacyDistributorFormats() {
+  if (typeof window === "undefined") return;
+  const migrationKey = `${DISTRIBUTOR_PROFILE_STORAGE_KEY}:indexeddb-migrated`;
+  if (window.localStorage.getItem(migrationKey) === "true") return;
+  const legacyProfiles = readDistributorProfiles();
+  for (const profile of legacyProfiles) {
+    await saveDistributorFormat({
+      ...profile,
+      id: profile.id ?? crypto.randomUUID(),
+      active: profile.active !== false,
+      deletedAt: profile.deletedAt ?? null,
+    });
+  }
+  window.localStorage.removeItem(DISTRIBUTOR_PROFILE_STORAGE_KEY);
+  window.localStorage.setItem(migrationKey, "true");
+}
+
+async function saveDistributorFormat(
+  profile: DistributorFormatProfile,
+  sampleFile?: File | Blob | null,
+): Promise<DistributorFormatProfile> {
+  const now = new Date().toISOString();
+  const id = profile.id ?? crypto.randomUUID();
+
+  const { db, transaction, store } = await distributorStoreTransaction("readwrite");
+  await new Promise<void>((resolve, reject) => {
+    const existingRequest = store.get(id);
+    existingRequest.onsuccess = () => {
+      const existing = existingRequest.result as DistributorFormatIndexedRecord | undefined;
+      const record: DistributorFormatIndexedRecord = {
+        ...profile,
+        id,
+        profileName: profile.profileName || profile.distributorName,
+        active: true,
+        isActive: true,
+        deletedAt: null,
+        createdAt: profile.createdAt ?? existing?.createdAt ?? now,
+        lastUpdated: now,
+        sourceFileBlob: sampleFile ?? existing?.sourceFileBlob ?? undefined,
+      };
+      const putRequest = store.put(record);
+      putRequest.onerror = () =>
+        reject(putRequest.error ?? new Error("Distributor format save failed."));
+    };
+    existingRequest.onerror = () =>
+      reject(existingRequest.error ?? new Error("Distributor format save failed."));
+    transaction.oncomplete = () => {
+      db.close();
+      resolve();
+    };
+    transaction.onerror = () => {
+      db.close();
+      reject(transaction.error ?? new Error("Distributor format save failed."));
+    };
+    transaction.onabort = () => {
+      db.close();
+      reject(transaction.error ?? new Error("Distributor format save failed."));
+    };
+  });
+  return {
+    ...profile,
+    id,
+    profileName: profile.profileName || profile.distributorName,
+    active: true,
+    deletedAt: null,
+    createdAt: profile.createdAt ?? now,
+    lastUpdated: now,
+  };
+}
+
+async function getDistributorFormats(): Promise<DistributorFormatProfile[]> {
+  await migrateLegacyDistributorFormats();
+  const deletedNames = readDeletedDistributorProfileNames();
+  const { db, transaction, store } = await distributorStoreTransaction("readonly");
+  const records = await new Promise<DistributorFormatIndexedRecord[]>((resolve, reject) => {
+    let result: DistributorFormatIndexedRecord[] = [];
+    const request = store.getAll();
+    request.onsuccess = () => {
+      result = (request.result ?? []) as DistributorFormatIndexedRecord[];
+    };
+    request.onerror = () => reject(request.error ?? new Error("Distributor format load failed."));
+    transaction.oncomplete = () => {
+      db.close();
+      resolve(result);
+    };
+    transaction.onerror = () => {
+      db.close();
+      reject(transaction.error ?? new Error("Distributor format load failed."));
+    };
+    transaction.onabort = () => {
+      db.close();
+      reject(transaction.error ?? new Error("Distributor format load failed."));
+    };
+  });
+
+  return mergeDistributorProfiles(
+    records
+      .filter(
+        (record) =>
+          record.isActive !== false &&
+          record.active !== false &&
+          !record.deletedAt &&
+          !deletedNames.has(record.distributorName.trim().toLowerCase()),
+      )
+      .map(({ sourceFileBlob, isActive, ...profile }) => profile),
+  );
+}
+
+async function getDistributorFormatById(id: string): Promise<DistributorFormatProfile | null> {
+  const { db, transaction, store } = await distributorStoreTransaction("readonly");
+  const record = await new Promise<DistributorFormatIndexedRecord | undefined>(
+    (resolve, reject) => {
+      let result: DistributorFormatIndexedRecord | undefined;
+      const request = store.get(id);
+      request.onsuccess = () => {
+        result = request.result as DistributorFormatIndexedRecord | undefined;
+      };
+      request.onerror = () =>
+        reject(request.error ?? new Error("Distributor format lookup failed."));
+      transaction.oncomplete = () => {
+        db.close();
+        resolve(result);
+      };
+      transaction.onerror = () => {
+        db.close();
+        reject(transaction.error ?? new Error("Distributor format lookup failed."));
+      };
+      transaction.onabort = () => {
+        db.close();
+        reject(transaction.error ?? new Error("Distributor format lookup failed."));
+      };
+    },
+  );
+  if (!record || record.isActive === false || record.deletedAt) return null;
+  const { sourceFileBlob, isActive, ...profile } = record;
+  return profile;
+}
+
+async function updateDistributorFormat(
+  id: string,
+  updates: Partial<DistributorFormatProfile>,
+): Promise<DistributorFormatProfile> {
+  const existing = await getDistributorFormatById(id);
+  if (!existing) throw new Error("Distributor format not found.");
+  return saveDistributorFormat({ ...existing, ...updates, id });
+}
+
+async function deleteDistributorFormat(idOrName: string): Promise<void> {
+  const formats = await getDistributorFormats();
+  const target = formats.find(
+    (format) =>
+      format.id === idOrName ||
+      format.distributorName.trim().toLowerCase() === idOrName.trim().toLowerCase(),
+  );
+  if (!target?.id) throw new Error("Distributor format not found.");
+
+  const { db, transaction, store } = await distributorStoreTransaction("readwrite");
+  await new Promise<void>((resolve, reject) => {
+    const request = store.get(target.id);
+    request.onsuccess = () => {
+      const record = request.result as DistributorFormatIndexedRecord | undefined;
+      if (!record) {
+        reject(new Error("Distributor format not found."));
+        return;
+      }
+      const now = new Date().toISOString();
+      const updateRequest = store.put({
+        ...record,
+        active: false,
+        isActive: false,
+        deletedAt: now,
+        lastUpdated: now,
+      } satisfies DistributorFormatIndexedRecord);
+      updateRequest.onsuccess = () => resolve();
+      updateRequest.onerror = () =>
+        reject(updateRequest.error ?? new Error("Distributor format delete failed."));
+    };
+    request.onerror = () => reject(request.error ?? new Error("Distributor format delete failed."));
+    transaction.oncomplete = () => {
+      db.close();
+      resolve();
+    };
+    transaction.onerror = () => {
+      db.close();
+      reject(transaction.error ?? new Error("Distributor format delete failed."));
+    };
+    transaction.onabort = () => {
+      db.close();
+      reject(transaction.error ?? new Error("Distributor format delete failed."));
+    };
+  });
+}
+
 function readDistributorProfiles(): DistributorFormatProfile[] {
   if (typeof window === "undefined") return [];
 
   try {
     const raw = window.localStorage.getItem(DISTRIBUTOR_PROFILE_STORAGE_KEY);
     if (!raw) return [];
+    const deletedNames = readDeletedDistributorProfileNames();
     const profiles = JSON.parse(raw) as Partial<DistributorFormatProfile>[];
     if (!Array.isArray(profiles)) return [];
     return profiles
       .filter((profile): profile is DistributorFormatProfile =>
         Boolean(profile.distributorName && Array.isArray(profile.numericOrder)),
       )
+      .filter((profile) => !deletedNames.has(profile.distributorName.trim().toLowerCase()))
       .map((profile) => ({
         ...profile,
         numericOrder: sanitizeDistributorNumericOrder(profile.numericOrder),
@@ -6520,7 +6812,64 @@ function readDistributorProfiles(): DistributorFormatProfile[] {
 
 function writeDistributorProfiles(profiles: DistributorFormatProfile[]) {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(DISTRIBUTOR_PROFILE_STORAGE_KEY, JSON.stringify(profiles));
+  window.localStorage.setItem(
+    DISTRIBUTOR_PROFILE_STORAGE_KEY,
+    JSON.stringify(mergeDistributorProfiles(profiles)),
+  );
+}
+
+function mergeDistributorProfiles(
+  profiles: DistributorFormatProfile[],
+): DistributorFormatProfile[] {
+  const deletedNames = readDeletedDistributorProfileNames();
+  const byName = new Map<string, DistributorFormatProfile>();
+  for (const profile of profiles) {
+    const key = profile.distributorName?.trim().toLowerCase();
+    if (!key || deletedNames.has(key) || profile.active === false) continue;
+    const existing = byName.get(key);
+    if (!existing) {
+      byName.set(key, profile);
+      continue;
+    }
+    const existingTime = Date.parse(existing.lastUpdated || existing.createdAt || "");
+    const nextTime = Date.parse(profile.lastUpdated || profile.createdAt || "");
+    if (!Number.isFinite(existingTime) || (Number.isFinite(nextTime) && nextTime >= existingTime)) {
+      byName.set(key, profile);
+    }
+  }
+  return [...byName.values()].sort(
+    (a, b) =>
+      Date.parse(b.lastUpdated || b.createdAt || "") -
+      Date.parse(a.lastUpdated || a.createdAt || ""),
+  );
+}
+
+function readDeletedDistributorProfileNames(): Set<string> {
+  if (typeof window === "undefined") return new Set();
+  try {
+    const raw = window.localStorage.getItem(DISTRIBUTOR_DELETED_PROFILE_STORAGE_KEY);
+    const names = raw ? (JSON.parse(raw) as unknown) : [];
+    return new Set(
+      Array.isArray(names) ? names.filter((name): name is string => typeof name === "string") : [],
+    );
+  } catch (error) {
+    console.warn("Distributor deleted profile cache read failed", error);
+    return new Set();
+  }
+}
+
+function rememberDeletedDistributorProfile(distributorName: string) {
+  if (typeof window === "undefined") return;
+  const names = readDeletedDistributorProfileNames();
+  names.add(distributorName.trim().toLowerCase());
+  window.localStorage.setItem(DISTRIBUTOR_DELETED_PROFILE_STORAGE_KEY, JSON.stringify([...names]));
+}
+
+function forgetDeletedDistributorProfile(distributorName: string) {
+  if (typeof window === "undefined") return;
+  const names = readDeletedDistributorProfileNames();
+  names.delete(distributorName.trim().toLowerCase());
+  window.localStorage.setItem(DISTRIBUTOR_DELETED_PROFILE_STORAGE_KEY, JSON.stringify([...names]));
 }
 
 type DistributorFormatProfileRow = Tables<"distributor_format_profiles">;
@@ -6533,6 +6882,33 @@ function safeDistributorProfileName(value: string): string {
       .replace(/^-+|-+$/g, "")
       .slice(0, 80) || "distributor-format"
   );
+}
+
+function buildDistributorSampleStorageKey(
+  profileId: string,
+  profileName: string,
+  file: File,
+): string {
+  const safeName = safeDistributorProfileName(profileName);
+  const safeFileName = safeDistributorProfileName(file.name.replace(/\.[^.]+$/, ""));
+  const extension = file.name.includes(".") ? file.name.split(".").pop() : "";
+  return [
+    "indexeddb",
+    "distributor-format-samples",
+    profileId,
+    `${Date.now()}-${safeName || "format"}-${safeFileName || "sample"}${
+      extension ? `.${extension}` : ""
+    }`,
+  ].join("/");
+}
+
+function normalizeDistributorFormatName(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function stringArrayFromJson(value: unknown): string[] {
@@ -6561,6 +6937,7 @@ function stringRecordFromJson(value: unknown): Record<string, string> {
 
 function distributorProfileFromRow(row: DistributorFormatProfileRow): DistributorFormatProfile {
   return {
+    id: row.id,
     distributorName: row.distributor_name,
     profileName: row.profile_name,
     sourceSampleType: row.source_sample_type as DistributorFormatProfile["sourceSampleType"],
@@ -6591,24 +6968,37 @@ function distributorProfileFromRow(row: DistributorFormatProfileRow): Distributo
 }
 
 async function loadDistributorProfilesFromDatabase(): Promise<DistributorFormatProfile[]> {
+  const profiles: DistributorFormatProfile[] = [...readDistributorProfiles()];
+
   const { data, error } = await supabase
     .from("distributor_format_profiles")
     .select("*")
     .eq("active", true)
     .order("updated_at", { ascending: false });
   if (error) {
-    const { data: userResult } = await supabase.auth.getUser();
-    const userId = userResult.user?.id;
-    if (userId) return loadDistributorProfilesFromStorage(userId);
-    throw error;
+    console.warn("Distributor format database load failed", error);
+  } else {
+    profiles.push(...(data ?? []).map(distributorProfileFromRow));
   }
-  return (data ?? []).map(distributorProfileFromRow);
+
+  const { data: userResult } = await supabase.auth.getUser();
+  const userId = userResult.user?.id;
+  if (userId) {
+    try {
+      profiles.push(...(await loadDistributorProfilesFromStorage(userId)));
+    } catch (storageError) {
+      console.warn("Distributor format storage load failed", storageError);
+    }
+  }
+
+  return mergeDistributorProfiles(profiles);
 }
 
 async function loadDistributorProfilesFromStorage(
   userId: string,
 ): Promise<DistributorFormatProfile[]> {
   const folder = `${userId}/${DISTRIBUTOR_PROFILE_STORAGE_FOLDER}`;
+  const deletedNames = readDeletedDistributorProfileNames();
   const { data: files, error } = await supabase.storage
     .from(DISTRIBUTOR_SAMPLE_BUCKET)
     .list(folder, { limit: 1000, sortBy: { column: "updated_at", order: "desc" } });
@@ -6627,7 +7017,13 @@ async function loadDistributorProfilesFromStorage(
     }
     try {
       const parsed = JSON.parse(await data.text()) as DistributorFormatProfile;
-      if (parsed.active !== false && parsed.distributorName) profiles.push(parsed);
+      if (
+        parsed.active !== false &&
+        parsed.distributorName &&
+        !deletedNames.has(parsed.distributorName.trim().toLowerCase())
+      ) {
+        profiles.push(parsed);
+      }
     } catch (parseError) {
       console.warn("Distributor format profile JSON parse failed", parseError);
     }
@@ -6731,9 +7127,11 @@ async function deleteDistributorProfileFromDatabase(
   } catch (error) {
     console.warn("Distributor format database lookup failed during delete", error);
   }
+  let databaseRowDeleted = false;
   if (row) {
     const { error } = await supabase.from("distributor_format_profiles").delete().eq("id", row.id);
     if (error) throw error;
+    databaseRowDeleted = true;
   }
 
   const profileJsonPath = `${userId}/${DISTRIBUTOR_PROFILE_STORAGE_FOLDER}/${safeDistributorProfileName(
@@ -6747,7 +7145,10 @@ async function deleteDistributorProfileFromDatabase(
     const { error: removeError } = await supabase.storage
       .from(DISTRIBUTOR_SAMPLE_BUCKET)
       .remove(pathsToRemove);
-    if (removeError) console.warn("Distributor sample delete failed", removeError);
+    if (removeError) {
+      if (!databaseRowDeleted) throw removeError;
+      console.warn("Distributor sample cleanup failed after profile delete", removeError);
+    }
   }
 }
 
@@ -6899,7 +7300,8 @@ function formatHistoryDate(value: string): string {
   }).format(new Date(value));
 }
 
-function formatBytes(size: number): string {
+function formatBytes(size?: number): string {
+  if (!size || !Number.isFinite(size)) return "0 B";
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
