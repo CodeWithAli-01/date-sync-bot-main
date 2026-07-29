@@ -32,14 +32,25 @@ export interface DailyPerformanceRow {
   teamName: string;
   employeeCode: string;
   name: string;
+  region: string;
+  city: string;
   designation: string;
   planned: number;
   unplanned: number;
+  morningCalls: number;
+  morningHours: number;
+  morningLastCall: string;
+  eveningCalls: number;
+  eveningHours: number;
+  eveningFirstCall: string;
+  eveningLastCall: string;
+  totalWorkingHours: number;
   totalCalls: number;
   selfies: number;
   cpTime: string;
   plannedPercent: number;
   topQualified: boolean;
+  lowQualified: boolean;
 }
 
 export interface BulkDailyReportSummaryItem {
@@ -73,6 +84,11 @@ interface CallSummary {
   evening: number;
   total: number;
   cpTime: string;
+  cpMinutes: number | null;
+  morningFirstMinutes: number | null;
+  morningLastMinutes: number | null;
+  eveningFirstMinutes: number | null;
+  eveningLastMinutes: number | null;
   selfies: number | null;
   remarks: Set<string>;
 }
@@ -90,6 +106,8 @@ interface DailyColumns {
   remarksCol?: number;
   selfieCol?: number;
   teamCol?: number;
+  regionCol?: number;
+  cityCol?: number;
   designationCol?: number;
 }
 
@@ -200,6 +218,8 @@ const TEMPLATE_HEADER_HINTS: Record<string, string[]> = {
   cp: ["cp"],
   remarks: ["remarks", "remark"],
   selfies: ["selfies", "selfie", "images", "image"],
+  region: ["region", "zone", "area"],
+  city: ["city", "town", "territory", "headquarter", "hq"],
   designation: ["designation", "desig", "position", "title"],
 };
 
@@ -478,25 +498,39 @@ function processDailySheet(
       }
     }
     const performanceSelfies = match.selfies ?? 0;
+    const morningHours = dailyShiftHours(
+      match.cpMinutes,
+      match.morningFirstMinutes,
+      match.morningLastMinutes,
+    );
+    const eveningHours = dailyShiftHours(null, match.eveningFirstMinutes, match.eveningLastMinutes);
+    const totalWorkingHours = roundHours(morningHours + eveningHours);
     if (match.total > 0) preview.push({ name: name || match.name, total: match.total });
     performanceRows.push({
       teamName: rowTeamName || match.teamName || sheet.name,
       employeeCode: code,
       name: name || match.name,
+      region: outputColumns.regionCol ? cellText(row.getCell(outputColumns.regionCol)) : "",
+      city: outputColumns.cityCol ? cellText(row.getCell(outputColumns.cityCol)) : "",
       designation: outputColumns.designationCol
         ? cellText(row.getCell(outputColumns.designationCol))
         : "",
       planned: match.planned,
       unplanned: match.unplanned,
+      morningCalls: match.morning,
+      morningHours,
+      morningLastCall: formatMinutes(match.morningLastMinutes),
+      eveningCalls: match.evening,
+      eveningHours,
+      eveningFirstCall: formatMinutes(match.eveningFirstMinutes),
+      eveningLastCall: formatMinutes(match.eveningLastMinutes),
+      totalWorkingHours,
       totalCalls: match.total,
       selfies: performanceSelfies,
       cpTime: match.cpTime,
       plannedPercent: percent(match.planned, match.total),
-      topQualified:
-        match.total >= 10 &&
-        performanceSelfies >= 10 &&
-        percent(match.planned, match.total) >= 65 &&
-        isTimeOnOrBefore(match.cpTime, 10 * 60),
+      topQualified: match.total >= 12 && morningHours >= 4 && eveningHours >= 3,
+      lowQualified: match.total <= 5 || match.morning === 0 || match.evening === 0,
     });
   }
 
@@ -721,10 +755,11 @@ function readCallLogSheet(
     const eventType = normalize(cellText(row.getCell(columns.eventTypeCol)));
     const shift = normalize(cellText(row.getCell(columns.shiftCol)));
     const teamName = columns.teamCol ? cellText(row.getCell(columns.teamCol)).trim() : sheet.name;
-    const startTime = formatTime(
+    const startTimeInfo = parseTimeInfo(
       row.getCell(columns.startTimeCol).value,
       cellText(row.getCell(columns.startTimeCol)),
     );
+    const startTime = startTimeInfo.label;
 
     if (teamName) teamNames.set(teamKey(teamName), teamName);
 
@@ -742,6 +777,11 @@ function readCallLogSheet(
         evening: 0,
         total: 0,
         cpTime: "",
+        cpMinutes: null,
+        morningFirstMinutes: null,
+        morningLastMinutes: null,
+        eveningFirstMinutes: null,
+        eveningLastMinutes: null,
         selfies: null,
         remarks: new Set<string>(),
       };
@@ -758,7 +798,15 @@ function readCallLogSheet(
     if (dateKey) summary.dates.add(dateKey);
     if (meetingType === "contact point") {
       contactPointRows++;
-      if (!summary.cpTime && startTime) summary.cpTime = startTime;
+      if (startTimeInfo.minutes !== null) {
+        summary.cpMinutes =
+          summary.cpMinutes === null
+            ? startTimeInfo.minutes
+            : Math.min(summary.cpMinutes, startTimeInfo.minutes);
+        summary.cpTime = formatMinutes(summary.cpMinutes);
+      } else if (!summary.cpTime && startTime) {
+        summary.cpTime = startTime;
+      }
       continue;
     }
 
@@ -766,8 +814,14 @@ function readCallLogSheet(
     faceToFaceRows++;
     if (eventType === "planned") summary.planned++;
     if (eventType === "unplanned") summary.unplanned++;
-    if (shift === "morning") summary.morning++;
-    if (shift === "evening") summary.evening++;
+    if (shift === "morning") {
+      summary.morning++;
+      updateShiftWindow(summary, "morning", startTimeInfo.minutes);
+    }
+    if (shift === "evening") {
+      summary.evening++;
+      updateShiftWindow(summary, "evening", startTimeInfo.minutes);
+    }
     summary.total = summary.morning + summary.evening;
   }
 
@@ -867,7 +921,24 @@ async function readCallLogs(files: File | File[]): Promise<{
       existing.evening += summary.evening;
       existing.total += summary.total;
       summary.remarks.forEach((remark) => existing.remarks.add(remark));
-      if (!existing.cpTime && summary.cpTime) existing.cpTime = summary.cpTime;
+      existing.cpMinutes = minNullable(existing.cpMinutes, summary.cpMinutes);
+      existing.cpTime = formatMinutes(existing.cpMinutes) || existing.cpTime || summary.cpTime;
+      existing.morningFirstMinutes = minNullable(
+        existing.morningFirstMinutes,
+        summary.morningFirstMinutes,
+      );
+      existing.morningLastMinutes = maxNullable(
+        existing.morningLastMinutes,
+        summary.morningLastMinutes,
+      );
+      existing.eveningFirstMinutes = minNullable(
+        existing.eveningFirstMinutes,
+        summary.eveningFirstMinutes,
+      );
+      existing.eveningLastMinutes = maxNullable(
+        existing.eveningLastMinutes,
+        summary.eveningLastMinutes,
+      );
     }
   }
 
@@ -905,7 +976,7 @@ async function applySelfiesToCallLog(
   callLog.selfieEmptyFiles = 0;
   callLog.selfieColumnMissFiles = 0;
   callLog.selfieUnreadableFiles = 0;
-  for (const summary of callLog.summaries) summary.selfies = null;
+  for (const summary of callLog.summaries) summary.selfies = fileList.length ? null : 0;
   if (!fileList.length) return;
 
   const selfieData = await readSelfieFiles(fileList);
@@ -1167,6 +1238,80 @@ function isTimeOnOrBefore(value: string, maxMinutes: number): boolean {
   return minutes !== null && minutes <= maxMinutes;
 }
 
+function dailyShiftHours(
+  preferredStartMinutes: number | null,
+  firstCallMinutes: number | null,
+  lastCallMinutes: number | null,
+): number {
+  const end = lastCallMinutes;
+  if (end === null) return 0;
+
+  const start = preferredStartMinutes ?? firstCallMinutes;
+  if (start === null || end <= start) return 0;
+  return roundHours((end - start) / 60);
+}
+
+function updateShiftWindow(
+  summary: CallSummary,
+  shift: "morning" | "evening",
+  minutes: number | null,
+) {
+  if (minutes === null) return;
+
+  if (shift === "morning") {
+    summary.morningFirstMinutes = minNullable(summary.morningFirstMinutes, minutes);
+    summary.morningLastMinutes = maxNullable(summary.morningLastMinutes, minutes);
+    return;
+  }
+
+  summary.eveningFirstMinutes = minNullable(summary.eveningFirstMinutes, minutes);
+  summary.eveningLastMinutes = maxNullable(summary.eveningLastMinutes, minutes);
+}
+
+function minNullable(a: number | null, b: number | null): number | null {
+  if (a === null) return b;
+  if (b === null) return a;
+  return Math.min(a, b);
+}
+
+function maxNullable(a: number | null, b: number | null): number | null {
+  if (a === null) return b;
+  if (b === null) return a;
+  return Math.max(a, b);
+}
+
+function roundHours(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function parseTimeInfo(value: unknown, text: string): { label: string; minutes: number | null } {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    const minutes = value.getHours() * 60 + value.getMinutes();
+    return { label: formatMinutes(minutes), minutes };
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const dayFraction = value >= 0 && value < 1 ? value : value % 1;
+    if (dayFraction >= 0) {
+      const minutes = Math.round(dayFraction * 24 * 60);
+      return { label: formatMinutes(minutes), minutes };
+    }
+  }
+
+  const minutes = parseTimeToMinutes(text);
+  return { label: minutes === null ? "" : formatMinutes(minutes), minutes };
+}
+
+function formatMinutes(value: number | null): string {
+  if (value === null) return "";
+  const normalized = ((value % (24 * 60)) + 24 * 60) % (24 * 60);
+  let hours = Math.floor(normalized / 60);
+  const minutes = normalized % 60;
+  const suffix = hours >= 12 ? "PM" : "AM";
+  hours = hours % 12 || 12;
+  return `${hours}:${String(minutes).padStart(2, "0")} ${suffix}`;
+}
+
 function parseTimeToMinutes(value: string): number | null {
   const text = String(value ?? "").trim();
   if (!text) return null;
@@ -1200,6 +1345,8 @@ function findTemplateColumns(sheet: ExcelJS.Worksheet, required = true): DailyCo
     const cpCol = findHeader(labels, TEMPLATE_HEADER_HINTS.cp, false);
     const remarksCol = findHeader(labels, TEMPLATE_HEADER_HINTS.remarks, false);
     const selfieCol = findHeader(labels, TEMPLATE_HEADER_HINTS.selfies, false);
+    const regionCol = findHeader(labels, TEMPLATE_HEADER_HINTS.region, false);
+    const cityCol = findHeader(labels, TEMPLATE_HEADER_HINTS.city, false);
     const designationCol = findHeader(labels, TEMPLATE_HEADER_HINTS.designation, false);
 
     if (
@@ -1225,6 +1372,8 @@ function findTemplateColumns(sheet: ExcelJS.Worksheet, required = true): DailyCo
         remarksCol: remarksCol || undefined,
         selfieCol: selfieCol || undefined,
         teamCol: teamCol || undefined,
+        regionCol: regionCol || undefined,
+        cityCol: cityCol || undefined,
         designationCol: designationCol || undefined,
       };
     }
@@ -1382,6 +1531,8 @@ function shiftDailyColumnsAfterInsert(columns: DailyColumns, insertAt: number): 
     cpCol: shift(columns.cpCol)!,
     selfieCol: shift(columns.selfieCol),
     teamCol: shift(columns.teamCol),
+    regionCol: shift(columns.regionCol),
+    cityCol: shift(columns.cityCol),
     designationCol: shift(columns.designationCol),
     remarksCol: insertAt,
   };
@@ -1631,6 +1782,13 @@ function normalize(value: string): string {
 
 function teamKey(value: string): string {
   return normalize(value).replace(/[^a-z0-9]+/g, "");
+}
+
+function teamNamesMatch(sourceValue: string, sheetName: string): boolean {
+  const sourceKey = teamKey(sourceValue);
+  const sheetKey = teamKey(sheetName);
+  if (!sourceKey || !sheetKey) return false;
+  return sourceKey.includes(sheetKey) || sheetKey.includes(sourceKey);
 }
 
 function normalizeEmployeeCode(value: string): string {

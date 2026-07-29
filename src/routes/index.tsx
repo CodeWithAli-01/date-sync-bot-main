@@ -66,6 +66,7 @@ import {
 } from "@/lib/doctor-coverage-processor";
 import {
   processMonthlyPlannedReport,
+  type MonthlyPlannedDayDetail,
   type MonthlyPlannedResult,
 } from "@/lib/monthly-planned-processor";
 import {
@@ -147,22 +148,38 @@ interface ActiveDeviceSession {
 }
 
 interface PerformanceReport {
+  variant?: "daily" | "monthly-planned";
   title: string;
   description: string;
   fileName: string;
+  sourceBlob?: Blob;
+  allRows?: PerformanceRow[];
   topRows: PerformanceRow[];
   lowRows: PerformanceRow[];
   summaryRows: Record<string, string | number>[];
+  teamReports?: PerformanceTeamReport[];
 }
 
 interface PerformanceRow {
   teamName?: string;
   employeeCode?: string;
   name: string;
+  region?: string;
+  city?: string;
   designation?: string;
   value: number | string;
   note?: string;
   details?: Record<string, string | number>;
+  monthlyPlannedDailyDetails?: MonthlyPlannedDayDetail[];
+  lowReasons?: string[];
+}
+
+interface PerformanceTeamReport {
+  teamName: string;
+  allRows: PerformanceRow[];
+  topRows: PerformanceRow[];
+  lowRows: PerformanceRow[];
+  summaryRows: Record<string, string | number>[];
 }
 
 const APP_NAME = "Reporting Management";
@@ -852,6 +869,7 @@ function HomePage() {
   }, [authUser]);
 
   const canProcessDaily = callLogFiles.length > 0 && Boolean(dailyTemplateFile) && !dailyProcessing;
+  const dailySelfiesAttached = dailySelfieFiles.length > 0;
   const canProcessCoverage =
     coverageSourceFiles.length > 0 && Boolean(coverageTemplateFile) && !coverageProcessing;
   const canProcessMonthlyPlanned =
@@ -2134,15 +2152,15 @@ function HomePage() {
 
               <UploadCard
                 step={3}
-                title="Selfies Excel"
+                title="Selfies Excel (Optional)"
                 subtitle={
-                  dailySelfieFiles.length
+                  dailySelfiesAttached
                     ? `${dailySelfieFiles.length} selfies file(s) selected`
-                    : "Upload selfies workbook(s)"
+                    : "Upload only when selfie counts are needed"
                 }
                 icon={<FileSpreadsheet className="h-5 w-5" />}
                 accept=".xlsx,.xls,.xlsm"
-                ready={dailySelfieFiles.length > 0}
+                ready={dailySelfiesAttached}
                 onClick={() => dailySelfieInputRef.current?.click()}
               >
                 <input
@@ -2198,8 +2216,8 @@ function HomePage() {
                   </h2>
                   <p className="text-sm text-muted-foreground">
                     Data is matched by Employee Code only, then Planned, Unplanned, Mor, Eve, Total,
-                    Cp, and Selfies are filled in the sample file. Selfies are counted from WhatsApp
-                    export image rows only for the dates found in the call log.
+                    Cp, and Selfies are filled in the sample file. Selfies are optional; without
+                    selfie workbooks the report still generates with selfie counts left at 0.
                   </p>
                 </div>
                 <Button
@@ -2417,7 +2435,10 @@ function HomePage() {
               </div>
               <div className="space-y-3">
                 <ChecklistItem done={callLogFiles.length > 0} label="Call log attached" />
-                <ChecklistItem done={dailySelfieFiles.length > 0} label="Selfies Excel attached" />
+                <ChecklistItem
+                  done
+                  label={dailySelfiesAttached ? "Selfies Excel attached" : "Selfies Excel optional"}
+                />
                 <ChecklistItem done={Boolean(dailyTemplateFile)} label="Sample file attached" />
                 <ChecklistItem
                   done={Boolean(dailyReport || bulkDailyReport)}
@@ -2430,8 +2451,8 @@ function HomePage() {
               <div className="text-xs font-bold uppercase text-primary">Match rule</div>
               <p className="mt-2 text-sm text-muted-foreground">
                 The sample file must include: Employee Code, Name, Planned, Unplanned, Mor, Eve,
-                Total, and Cp. Add WhatsApp export workbooks in Selfies Excel to count image rows by
-                employee and call-log date.
+                Total, and Cp. Selfies Excel can be skipped; add WhatsApp export workbooks only when
+                image rows should be counted by employee and call-log date.
               </p>
             </Card>
           </aside>
@@ -5790,36 +5811,46 @@ function buildMonthlyPlannedPerformanceReport(report: MonthlyPlannedResult): Per
     teamName: row.teamName,
     employeeCode: row.employeeCode,
     name: row.name,
+    region: row.region,
     designation: row.designation,
-    value: row.plannedPercent,
-    note: `${row.plannedPercent}% planned, ${row.totalCalls} calls`,
+    value: row.lateCpDays + row.lowCallDays + row.missingShiftDays + row.lowWorkingHourDays,
+    note: row.lowReasons.length
+      ? row.lowReasons.join("; ")
+      : `${row.plannedPercent}% planned, ${row.totalCalls} calls`,
     details: {
       team: row.teamName,
-      employeeId: row.employeeCode,
+      employeeCode: row.employeeCode,
       name: row.name,
+      region: row.region,
       designation: row.designation,
       plannedCalls: row.planned,
       unplannedCalls: row.unplanned,
       totalCalls: row.totalCalls,
       plannedPercent: row.plannedPercent,
       cpAvgTime: row.cpAvgTime,
+      lateCpDays: row.lateCpDays,
+      lowCallDays: row.lowCallDays,
+      missingShiftDays: row.missingShiftDays,
+      lowWorkingHourDays: row.lowWorkingHourDays,
     },
+    monthlyPlannedDailyDetails: row.dailyDetails,
+    lowReasons: row.lowReasons,
     topQualified: row.topQualified,
+    lowQualified: row.lowQualified,
   }));
   return {
+    variant: "monthly-planned",
     title: "Monthly Planned Unplanned Performance",
-    description: "Top: employees with 70% or higher planned calls.",
+    description:
+      "Low: more than 10 days with late CP, 5 or fewer calls, missing morning/evening, or 5 or fewer working hours.",
     fileName: report.fileName.replace(/\.xlsx$/i, "") + " - Performance.xlsx",
+    allRows: rows,
     topRows: rows
       .filter((row) => row.topQualified)
-      .sort((a, b) => Number(b.value) - Number(a.value))
-      .slice(0, 20),
+      .sort((a, b) => Number(b.details.plannedPercent) - Number(a.details.plannedPercent)),
     lowRows: [
       ...buildReviewRows(report.unmatchedEmployees),
-      ...rows
-        .filter((row) => !row.topQualified)
-        .sort((a, b) => Number(a.value) - Number(b.value))
-        .slice(0, 20),
+      ...rows.filter((row) => row.lowQualified).sort((a, b) => Number(b.value) - Number(a.value)),
     ],
     summaryRows: [
       {
@@ -5835,19 +5866,19 @@ function buildDailyPerformanceReport(report: DailyReportResult): PerformanceRepo
   const unmatched = Math.max(report.totalEmployees - report.matchedEmployees, 0);
   const rows = dailyPerformanceRows(report.performanceRows);
   return {
+    variant: "daily",
     title: "Daily Report Performance",
-    description: "Top: 10 calls, 10 selfies, CP before 10:00, and 65% planned calls.",
+    description:
+      "Top: 12 total calls with 4+ morning hours and 3+ evening hours. Low: 5 or fewer total calls, or missing morning/evening shift.",
     fileName: report.fileName.replace(/\.xlsx$/i, "") + " - Performance.xlsx",
+    sourceBlob: report.blob,
+    allRows: rows,
     topRows: rows
       .filter((row) => row.topQualified)
-      .sort((a, b) => Number(b.value) - Number(a.value))
-      .slice(0, 20),
+      .sort((a, b) => Number(b.value) - Number(a.value)),
     lowRows: [
       ...buildReviewRows(report.unmatchedEmployees),
-      ...rows
-        .filter((row) => !row.topQualified)
-        .sort((a, b) => Number(a.value) - Number(b.value))
-        .slice(0, 20),
+      ...rows.filter((row) => row.lowQualified).sort((a, b) => Number(a.value) - Number(b.value)),
     ],
     summaryRows: [
       {
@@ -5866,25 +5897,86 @@ function buildDailyPerformanceReport(report: DailyReportResult): PerformanceRepo
 
 function buildBulkDailyPerformanceReport(report: BulkDailyReportResult): PerformanceReport {
   const rows = dailyPerformanceRows(report.performanceRows);
+  const failedTeamRows: PerformanceRow[] = report.summary
+    .filter((item) => item.status === "failed")
+    .map((item) => ({
+      teamName: item.teamName,
+      name: item.teamName,
+      value: "Failed",
+      note: item.error ?? "Team sheet could not be processed.",
+      details: {
+        team: item.teamName,
+        status: item.status,
+        totalEmployees: item.totalEmployees,
+        matchedEmployees: item.matchedEmployees,
+        error: item.error ?? "Team sheet could not be processed.",
+      },
+    }));
+  const teamNames = [
+    ...new Set([
+      ...rows
+        .map((row) => row.teamName)
+        .filter((teamName): teamName is string => Boolean(teamName)),
+      ...report.summary.map((item) => item.teamName).filter(Boolean),
+    ]),
+  ].sort((a, b) => a.localeCompare(b));
+  const teamReports = teamNames.map((teamName) => {
+    const teamRows = rows.filter((row) => row.teamName === teamName);
+    const teamFailedRows = failedTeamRows.filter((row) => row.teamName === teamName);
+    const teamSummary = report.summary.find((item) => item.teamName === teamName);
+    return {
+      teamName,
+      allRows: teamRows,
+      topRows: teamRows
+        .filter((row) => row.topQualified)
+        .sort((a, b) => Number(b.value) - Number(a.value)),
+      lowRows: teamRows
+        .filter((row) => row.lowQualified)
+        .sort((a, b) => Number(a.value) - Number(b.value))
+        .concat(teamFailedRows),
+      summaryRows: teamSummary
+        ? [
+            {
+              team: teamSummary.teamName,
+              status: teamSummary.status,
+              totalEmployees: teamSummary.totalEmployees,
+              matchedEmployees: teamSummary.matchedEmployees,
+              error: teamSummary.error ?? "",
+            },
+          ]
+        : [],
+    };
+  });
   return {
+    variant: "daily",
     title: "Daily Report Performance",
-    description: "Top: 10 calls, 10 selfies, CP before 10:00, and 65% planned calls.",
+    description:
+      "Top: 12 total calls with 4+ morning hours and 3+ evening hours. Low: 5 or fewer total calls, or missing morning/evening shift.",
     fileName: report.fileName.replace(/\.xlsx$/i, "") + " - Performance.xlsx",
+    sourceBlob: report.blob,
+    allRows: rows,
     topRows: rows
       .filter((row) => row.topQualified)
-      .sort((a, b) => Number(b.value) - Number(a.value))
-      .slice(0, 20),
+      .sort((a, b) => Number(b.value) - Number(a.value)),
     lowRows: rows
-      .filter((row) => !row.topQualified)
+      .filter((row) => row.lowQualified)
       .sort((a, b) => Number(a.value) - Number(b.value))
-      .slice(0, 20),
+      .concat(failedTeamRows),
     summaryRows: [
       {
         totalTeams: report.totalTeams,
         reportsGenerated: report.reportsGenerated,
         failedReports: report.failedReports,
       },
+      ...report.summary.map((item) => ({
+        team: item.teamName,
+        status: item.status,
+        totalEmployees: item.totalEmployees,
+        matchedEmployees: item.matchedEmployees,
+        error: item.error ?? "",
+      })),
     ],
+    teamReports,
   };
 }
 
@@ -5937,27 +6029,41 @@ function buildCoveragePerformanceReport(report: DoctorCoverageResult): Performan
 
 function dailyPerformanceRows(
   rows: DailyReportResult["performanceRows"],
-): Array<PerformanceRow & { topQualified: boolean }> {
+): Array<PerformanceRow & { topQualified: boolean; lowQualified: boolean }> {
   return rows.map((row) => ({
     teamName: row.teamName,
     employeeCode: row.employeeCode,
     name: row.name,
+    region: row.region,
+    city: row.city,
     designation: row.designation,
     value: row.totalCalls,
-    note: `${row.totalCalls} calls, ${row.selfies} selfies, ${row.plannedPercent}% planned`,
+    note: `${row.totalCalls} calls, ${formatPerformanceHours(row.morningHours)} morning, ${formatPerformanceHours(row.eveningHours)} evening`,
     details: {
-      team: row.teamName,
-      employeeId: row.employeeCode,
+      performanceStatus: row.topQualified ? "Top" : row.lowQualified ? "Low" : "Normal",
+      employeeCode: row.employeeCode,
       name: row.name,
+      region: row.region,
+      city: row.city,
       designation: row.designation,
+      cpTime: row.cpTime,
+      morningCalls: row.morningCalls,
+      morningHours: row.morningHours,
+      morningLastCall: row.morningLastCall,
+      eveningCalls: row.eveningCalls,
+      eveningHours: row.eveningHours,
+      eveningFirstCall: row.eveningFirstCall,
+      eveningLastCall: row.eveningLastCall,
+      totalWorkingHours: row.totalWorkingHours,
+      totalCalls: row.totalCalls,
       plannedCalls: row.planned,
       unplannedCalls: row.unplanned,
-      totalCalls: row.totalCalls,
+      team: row.teamName,
       selfies: row.selfies,
-      cpTime: row.cpTime,
       plannedPercent: row.plannedPercent,
     },
     topQualified: row.topQualified,
+    lowQualified: row.lowQualified,
   }));
 }
 
@@ -6015,9 +6121,11 @@ function PerformancePanel({
             >
               <div className="min-w-0">
                 <div className="truncate font-semibold text-foreground">{row.name}</div>
-                {(row.employeeCode || row.designation || row.teamName) && (
+                {(row.employeeCode || row.city || row.designation || row.teamName) && (
                   <div className="truncate text-xs text-muted-foreground">
-                    {[row.employeeCode, row.designation, row.teamName].filter(Boolean).join(" - ")}
+                    {[row.employeeCode, row.city, row.designation, row.teamName]
+                      .filter(Boolean)
+                      .join(" - ")}
                   </div>
                 )}
                 {row.note && (
@@ -7422,69 +7530,40 @@ async function buildSheetPreview(blob: Blob, preferredSheetName?: string): Promi
 
 async function buildPerformanceWorkbook(report: PerformanceReport): Promise<Blob> {
   const ExcelJS = (await import("exceljs")).default;
+  if (report.variant === "monthly-planned") {
+    return buildMonthlyPlannedPerformanceWorkbook(ExcelJS, report);
+  }
+  if (report.variant === "daily") return buildDailyPerformanceWorkbook(ExcelJS, report);
+
   const wb = new ExcelJS.Workbook();
-  wb.creator = APP_NAME;
-  wb.created = new Date();
+  if (report.sourceBlob) {
+    await wb.xlsx.load(await report.sourceBlob.arrayBuffer());
+  } else {
+    wb.creator = APP_NAME;
+    wb.created = new Date();
+  }
 
   const sheets = [
-    { name: "Summary", rows: report.summaryRows },
-    { name: "Top Performance", rows: performanceRowsToSheetRows(report.topRows) },
-    { name: "Low Performance", rows: performanceRowsToSheetRows(report.lowRows) },
+    { name: "Perf Summary", rows: report.summaryRows },
+    ...(report.allRows?.length
+      ? [{ name: "All Performance", rows: performanceRowsToSheetRows(report.allRows) }]
+      : []),
+    { name: "Top Performance", rows: performanceRowsToSheetRows(report.topRows, "Top") },
+    { name: "Low Performance", rows: performanceRowsToSheetRows(report.lowRows, "Low") },
   ];
 
   for (const sheet of sheets) {
-    const rows = sheet.rows.length ? sheet.rows : [{ status: "No performance data available" }];
-    const ws = wb.addWorksheet(safeWorksheetName(sheet.name));
-    const keys = Array.from(
-      rows.reduce((set, row) => {
-        Object.keys(row).forEach((key) => set.add(key));
-        return set;
-      }, new Set<string>()),
+    addPerformanceWorksheet(wb, report, sheet.name, sheet.rows);
+  }
+
+  for (const teamReport of report.teamReports ?? []) {
+    addPerformanceWorksheet(
+      wb,
+      report,
+      `${teamReport.teamName} Perf`,
+      performanceRowsToTeamSheetRows(teamReport),
+      teamReport.teamName,
     );
-
-    ws.columns = keys.map((key) => ({
-      header: toTitleCase(key.replace(/([A-Z])/g, " $1")),
-      key,
-      width: Math.max(14, Math.min(32, key.length + 6)),
-    }));
-    rows.forEach((row) => ws.addRow(row));
-    ws.spliceRows(1, 0, [`${report.title} - ${sheet.name}`], [report.description]);
-    ws.mergeCells(1, 1, 1, Math.max(keys.length, 1));
-    ws.mergeCells(2, 1, 2, Math.max(keys.length, 1));
-    ws.getRow(1).font = { bold: true, size: 14 };
-    ws.getRow(2).font = { italic: true, color: { argb: "FF64748B" } };
-    ws.getRow(1).alignment = { horizontal: "center" };
-    ws.getRow(2).alignment = { horizontal: "center" };
-    ws.views = [{ state: "frozen", ySplit: 3 }];
-
-    const header = ws.getRow(3);
-    header.font = { bold: true };
-    header.alignment = { horizontal: "center" };
-    header.eachCell((cell) => {
-      cell.fill = {
-        type: "pattern",
-        pattern: "solid",
-        fgColor: { argb: "FFE6F4F1" },
-      };
-      cell.border = {
-        top: { style: "thin" },
-        left: { style: "thin" },
-        bottom: { style: "thin" },
-        right: { style: "thin" },
-      };
-    });
-
-    ws.eachRow((row) => {
-      row.eachCell((cell) => {
-        cell.alignment = { vertical: "middle" };
-        cell.border = {
-          top: { style: "thin" },
-          left: { style: "thin" },
-          bottom: { style: "thin" },
-          right: { style: "thin" },
-        };
-      });
-    });
   }
 
   const buffer = await wb.xlsx.writeBuffer();
@@ -7493,16 +7572,565 @@ async function buildPerformanceWorkbook(report: PerformanceReport): Promise<Blob
   });
 }
 
-function performanceRowsToSheetRows(rows: PerformanceRow[]): Record<string, string | number>[] {
-  return rows.map((row) => ({
-    team: row.teamName ?? row.details?.team ?? "",
-    employeeId: row.employeeCode ?? row.details?.employeeId ?? "",
+async function buildDailyPerformanceWorkbook(
+  ExcelJS: typeof import("exceljs").default,
+  report: PerformanceReport,
+): Promise<Blob> {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = APP_NAME;
+  wb.created = new Date();
+
+  addDailyFlatPerformanceWorksheet(
+    wb,
+    "All Performance",
+    dailyRowsToPerformanceSheetRows(report.allRows ?? []),
+  );
+  if (report.topRows.length) {
+    addDailyFlatPerformanceWorksheet(
+      wb,
+      "Top Performance",
+      dailyRowsToPerformanceSheetRows(report.topRows, "Top"),
+    );
+  }
+  addDailyFlatPerformanceWorksheet(
+    wb,
+    "Low Performance",
+    dailyRowsToPerformanceSheetRows(report.lowRows, "Low"),
+  );
+
+  const teamReports = report.teamReports?.length
+    ? report.teamReports
+    : buildDailyTeamReports(report.allRows ?? []);
+  for (const teamReport of teamReports) {
+    addDailyTeamPerformanceWorksheet(
+      wb,
+      teamReport.teamName,
+      dailyRowsToTeamPerformanceSheetRows(teamReport.lowRows),
+    );
+  }
+
+  const buffer = await wb.xlsx.writeBuffer();
+  return new Blob([buffer], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+}
+
+async function buildMonthlyPlannedPerformanceWorkbook(
+  ExcelJS: typeof import("exceljs").default,
+  report: PerformanceReport,
+): Promise<Blob> {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = APP_NAME;
+  wb.created = new Date();
+
+  const lowRows = report.lowRows.filter((row) => row.monthlyPlannedDailyDetails?.length);
+  const rowsByTeam = new Map<string, PerformanceRow[]>();
+  const allRowsByTeam = new Map<string, PerformanceRow[]>();
+  for (const row of report.allRows ?? []) {
+    const teamName = row.teamName || String(row.details?.team ?? "").trim() || "Team";
+    const teamRows = allRowsByTeam.get(teamName) ?? [];
+    teamRows.push(row);
+    allRowsByTeam.set(teamName, teamRows);
+  }
+  for (const row of lowRows) {
+    const teamName = row.teamName || String(row.details?.team ?? "").trim() || "Team";
+    const teamRows = rowsByTeam.get(teamName) ?? [];
+    teamRows.push(row);
+    rowsByTeam.set(teamName, teamRows);
+  }
+
+  if (!rowsByTeam.size) {
+    addMonthlyPlannedTeamPerformanceWorksheet(wb, "Low Performance", []);
+  } else {
+    for (const [teamName, teamRows] of [...rowsByTeam.entries()].sort(([a], [b]) =>
+      a.localeCompare(b),
+    )) {
+      addMonthlyPlannedTeamPerformanceWorksheet(
+        wb,
+        teamName,
+        teamRows.sort((a, b) => Number(b.value || 0) - Number(a.value || 0)),
+        monthlyPlannedDates(allRowsByTeam.get(teamName) ?? teamRows),
+      );
+    }
+  }
+
+  const buffer = await wb.xlsx.writeBuffer();
+  return new Blob([buffer], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+}
+
+const MONTHLY_PLANNED_BASE_HEADERS = ["Employee Code", "Name", "Designation", "Region"] as const;
+
+const MONTHLY_PLANNED_BASE_WIDTHS = [14, 22, 14, 12];
+
+function addMonthlyPlannedTeamPerformanceWorksheet(
+  wb: import("exceljs").Workbook,
+  teamName: string,
+  rows: PerformanceRow[],
+  dateColumns?: string[],
+) {
+  const dates = dateColumns?.length ? dateColumns : monthlyPlannedDates(rows);
+  const headers = [...MONTHLY_PLANNED_BASE_HEADERS, ...dates];
+  const ws = wb.addWorksheet(uniqueWorksheetName(wb, `${teamName} Perf`));
+  headers.forEach((header, index) => {
+    ws.getColumn(index + 1).width =
+      index < MONTHLY_PLANNED_BASE_WIDTHS.length ? MONTHLY_PLANNED_BASE_WIDTHS[index] : 34;
+  });
+
+  ws.mergeCells(1, 1, 1, headers.length);
+  ws.mergeCells(2, 1, 2, headers.length);
+  ws.getCell(1, 1).value = teamName;
+  ws.getCell(2, 1).value = "Low performance";
+  ws.getRow(1).height = 28.5;
+  ws.getRow(2).height = 21;
+  styleDailyPerformanceTitleRow(ws.getRow(1), 16);
+  styleDailyPerformanceTitleRow(ws.getRow(2), 11);
+
+  setPlainWorksheetRow(ws, 3, headers);
+  styleDailyPerformanceHeader(ws.getRow(3));
+
+  if (!rows.length) {
+    setPlainWorksheetRow(ws, 4, ["No low performance data available"]);
+    styleMonthlyPlannedDataRow(ws.getRow(4), headers.length);
+  } else {
+    rows.forEach((row, index) => {
+      const detailsByDate = new Map(
+        (row.monthlyPlannedDailyDetails ?? []).map((detail) => [detail.date, detail]),
+      );
+      setPlainWorksheetRow(ws, index + 4, [
+        row.employeeCode ?? detailValue(row.details ?? {}, "employeeCode"),
+        row.name,
+        row.designation ?? detailValue(row.details ?? {}, "designation"),
+        row.region ?? detailValue(row.details ?? {}, "region"),
+        ...dates.map((date) => monthlyPlannedDateCell(detailsByDate.get(date))),
+      ]);
+      styleMonthlyPlannedDataRow(ws.getRow(index + 4), headers.length);
+    });
+  }
+
+  ws.views = [{ state: "frozen", ySplit: 3 }];
+  ws.autoFilter = { from: "A3", to: `${columnLetter(headers.length)}3` };
+}
+
+function monthlyPlannedDates(rows: PerformanceRow[]): string[] {
+  return [
+    ...new Set(
+      rows.flatMap((row) => (row.monthlyPlannedDailyDetails ?? []).map((detail) => detail.date)),
+    ),
+  ].sort((a, b) => a.localeCompare(b));
+}
+
+function monthlyPlannedDateCell(detail?: MonthlyPlannedDayDetail): string {
+  if (!detail) return "Absent";
+  return [
+    `CP: ${detail.cpTime || "N/A"}`,
+    `Total working: ${formatPerformanceMinutes(detail.totalWorkingMinutes)}`,
+    detail.morningCalls
+      ? `Morning: ${formatPerformanceMinutes(detail.morningMinutes)}, first ${detail.morningFirstCall || "N/A"}, last ${detail.morningLastCall || "N/A"}`
+      : "Morning: Absent",
+    detail.eveningCalls
+      ? `Evening: ${formatPerformanceMinutes(detail.eveningMinutes)}, first ${detail.eveningFirstCall || "N/A"}, last ${detail.eveningLastCall || "N/A"}`
+      : "Evening: Absent",
+    detail.totalCalls
+      ? `Calls: ${detail.totalCalls}, planned ${detail.planned}, unplanned ${detail.unplanned}`
+      : "Calls: 0 calls",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function styleMonthlyPlannedDataRow(row: import("exceljs").Row, columnCount: number) {
+  row.height = 92;
+  for (let column = 1; column <= columnCount; column++) {
+    const cell = row.getCell(column);
+    cell.font = { name: "Calibri", size: 10, color: { argb: "FF000000" } };
+    cell.alignment = {
+      horizontal: column === 2 || column > MONTHLY_PLANNED_BASE_HEADERS.length ? "left" : "center",
+      vertical: "middle",
+      wrapText: true,
+    };
+    cell.border = DAILY_PERFORMANCE_BORDER;
+  }
+}
+
+const DAILY_PERFORMANCE_HEADERS = [
+  "Performance Status",
+  "Team",
+  "Employee Code",
+  "Name",
+  "Region",
+  "Designation",
+  "Note",
+  "Cp Time",
+  "Morning Calls",
+  "Morning Hours",
+  "Morning Last Call",
+  "Evening Calls",
+  "Evening Hours",
+  "Evening First Call",
+  "Evening Last Call",
+  "Total Working Hours",
+  "Total Calls",
+  "Planned Calls",
+  "Unplanned Calls",
+  "Selfies",
+] as const;
+
+const DAILY_TEAM_PERFORMANCE_HEADERS = DAILY_PERFORMANCE_HEADERS.slice(2);
+
+const DAILY_PERFORMANCE_WIDTHS = [
+  23, 14, 18, 22, 14, 17, 30, 14, 18, 18, 21, 18, 18, 22, 21, 23, 16, 18, 20, 14,
+];
+
+const DAILY_TEAM_PERFORMANCE_WIDTHS = [
+  14.5, 21.5, 10, 12, 29, 14, 18, 18, 21, 16, 16, 22, 21, 18, 16, 18, 20, 14,
+];
+
+function buildDailyTeamReports(rows: PerformanceRow[]): PerformanceTeamReport[] {
+  const byTeam = new Map<string, PerformanceRow[]>();
+  for (const row of rows) {
+    const teamName = row.teamName || String(row.details?.team ?? "").trim() || "Team";
+    const teamRows = byTeam.get(teamName) ?? [];
+    teamRows.push(row);
+    byTeam.set(teamName, teamRows);
+  }
+
+  return [...byTeam.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([teamName, teamRows]) => ({
+      teamName,
+      allRows: teamRows,
+      topRows: teamRows.filter((row) => row.details?.performanceStatus === "Top"),
+      lowRows: teamRows
+        .filter((row) => row.details?.performanceStatus === "Low")
+        .sort((a, b) => Number(a.value || 0) - Number(b.value || 0)),
+      summaryRows: [],
+    }));
+}
+
+function addDailyFlatPerformanceWorksheet(
+  wb: import("exceljs").Workbook,
+  name: string,
+  rows: Record<string, string | number>[],
+) {
+  const ws = wb.addWorksheet(uniqueWorksheetName(wb, name));
+  DAILY_PERFORMANCE_HEADERS.forEach((header, index) => {
+    const column = ws.getColumn(index + 1);
+    column.width = DAILY_PERFORMANCE_WIDTHS[index];
+    column.key = dailyHeaderKey(header);
+  });
+
+  setPlainWorksheetRow(ws, 1, DAILY_PERFORMANCE_HEADERS);
+  styleDailyPerformanceHeader(ws.getRow(1));
+  rows.forEach((row, index) => {
+    setPlainWorksheetRow(
+      ws,
+      index + 2,
+      DAILY_PERFORMANCE_HEADERS.map((header) => row[dailyHeaderKey(header)] ?? ""),
+    );
+    styleDailyPerformanceDataRow(ws.getRow(index + 2));
+  });
+  ws.views = [{ state: "frozen", ySplit: 1 }];
+  ws.autoFilter = { from: "A1", to: `${columnLetter(DAILY_PERFORMANCE_HEADERS.length)}1` };
+}
+
+function addDailyTeamPerformanceWorksheet(
+  wb: import("exceljs").Workbook,
+  teamName: string,
+  rows: Record<string, string | number>[],
+) {
+  const ws = wb.addWorksheet(uniqueWorksheetName(wb, `${teamName} Perf`));
+  DAILY_TEAM_PERFORMANCE_HEADERS.forEach((header, index) => {
+    const column = ws.getColumn(index + 1);
+    column.width = DAILY_TEAM_PERFORMANCE_WIDTHS[index];
+    column.key = dailyHeaderKey(header);
+  });
+
+  ws.mergeCells(1, 1, 1, DAILY_TEAM_PERFORMANCE_HEADERS.length);
+  ws.mergeCells(2, 1, 2, DAILY_TEAM_PERFORMANCE_HEADERS.length);
+  ws.getCell(1, 1).value = teamName;
+  ws.getCell(2, 1).value = "Low performance";
+  ws.getRow(1).height = 28.5;
+  ws.getRow(2).height = 21;
+  styleDailyPerformanceTitleRow(ws.getRow(1), 16);
+  styleDailyPerformanceTitleRow(ws.getRow(2), 11);
+
+  setPlainWorksheetRow(ws, 3, DAILY_TEAM_PERFORMANCE_HEADERS);
+  styleDailyPerformanceHeader(ws.getRow(3));
+  rows.forEach((row, index) => {
+    setPlainWorksheetRow(
+      ws,
+      index + 4,
+      DAILY_TEAM_PERFORMANCE_HEADERS.map((header) => row[dailyHeaderKey(header)] ?? ""),
+    );
+    styleDailyPerformanceDataRow(ws.getRow(index + 4));
+  });
+  ws.views = [{ state: "frozen", ySplit: 3 }];
+  ws.autoFilter = { from: "A3", to: `${columnLetter(DAILY_TEAM_PERFORMANCE_HEADERS.length)}3` };
+}
+
+function dailyRowsToPerformanceSheetRows(
+  rows: PerformanceRow[],
+  forcedStatus?: string,
+): Record<string, string | number>[] {
+  return rows
+    .filter((row) => row.details?.employeeCode || row.employeeCode)
+    .map((row) => dailyPerformanceSheetRow(row, forcedStatus));
+}
+
+function dailyRowsToTeamPerformanceSheetRows(
+  rows: PerformanceRow[],
+): Record<string, string | number>[] {
+  return dailyRowsToPerformanceSheetRows(rows, "Low").map((row) => {
+    const { performanceStatus: _performanceStatus, team: _team, ...teamRow } = row;
+    return teamRow;
+  });
+}
+
+function dailyPerformanceSheetRow(
+  row: PerformanceRow,
+  forcedStatus?: string,
+): Record<string, string | number> {
+  const details = row.details ?? {};
+  const morningHours = detailValue(details, "morningHours");
+  const eveningHours = detailValue(details, "eveningHours");
+  const totalWorkingHours = detailValue(details, "totalWorkingHours");
+  const totalCalls = detailValue(details, "totalCalls") || row.value || 0;
+  return {
+    performanceStatus: forcedStatus ?? detailValue(details, "performanceStatus"),
+    team: row.teamName ?? detailValue(details, "team"),
+    employeeCode:
+      row.employeeCode ??
+      detailValue(details, "employeeCode") ??
+      detailValue(details, "employeeId"),
     name: row.name,
+    region: row.region ?? detailValue(details, "region"),
+    designation: row.designation ?? detailValue(details, "designation"),
+    note:
+      row.note && !String(row.note).includes("h ")
+        ? row.note
+        : `${totalCalls} calls, ${formatPerformanceHours(morningHours)} morning, ${formatPerformanceHours(eveningHours)} evening`,
+    cpTime: detailValue(details, "cpTime"),
+    morningCalls: detailValue(details, "morningCalls"),
+    morningHours: formatPerformanceHours(morningHours),
+    morningLastCall: detailValue(details, "morningLastCall"),
+    eveningCalls: detailValue(details, "eveningCalls"),
+    eveningHours: formatPerformanceHours(eveningHours),
+    eveningFirstCall: detailValue(details, "eveningFirstCall"),
+    eveningLastCall: detailValue(details, "eveningLastCall"),
+    totalWorkingHours: formatPerformanceHours(totalWorkingHours),
+    totalCalls,
+    plannedCalls: detailValue(details, "plannedCalls"),
+    unplannedCalls: detailValue(details, "unplannedCalls"),
+    selfies: detailValue(details, "selfies"),
+  };
+}
+
+function detailValue(details: Record<string, string | number>, key: string): string | number {
+  return details[key] ?? "";
+}
+
+function formatPerformanceHours(value: string | number): string {
+  if (value === "") return "";
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return "0 min";
+  const hours = Math.floor(numeric);
+  const decimal = String(value).split(".")[1]?.replace(/0+$/g, "") ?? "";
+  if (decimal) {
+    const directMinutes = Number(decimal);
+    if (Number.isFinite(directMinutes) && directMinutes < 60) {
+      return formatHourMinuteParts(hours, directMinutes);
+    }
+  }
+
+  const totalMinutes = Math.round(numeric * 60);
+  return formatHourMinuteParts(Math.floor(totalMinutes / 60), totalMinutes % 60);
+}
+
+function formatPerformanceMinutes(totalMinutes: number): string {
+  if (!Number.isFinite(totalMinutes) || totalMinutes <= 0) return "0 min";
+  return formatHourMinuteParts(Math.floor(totalMinutes / 60), Math.round(totalMinutes % 60));
+}
+
+function formatHourMinuteParts(hours: number, minutes: number): string {
+  const parts: string[] = [];
+  if (hours) parts.push(`${hours} ${hours === 1 ? "hour" : "hours"}`);
+  if (minutes) parts.push(`${minutes} min`);
+  return parts.length ? parts.join(" ") : "0 min";
+}
+
+function setPlainWorksheetRow(
+  ws: import("exceljs").Worksheet,
+  rowNumber: number,
+  values: readonly (string | number)[],
+) {
+  values.forEach((value, index) => {
+    ws.getCell(rowNumber, index + 1).value = value;
+  });
+}
+
+function styleDailyPerformanceTitleRow(row: import("exceljs").Row, size: number) {
+  row.eachCell({ includeEmpty: true }, (cell) => {
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE6F3F1" } };
+    cell.font = { name: "Calibri", size, bold: true, color: { argb: "FF000000" } };
+    cell.alignment = { horizontal: "center", vertical: "middle" };
+    cell.border = DAILY_PERFORMANCE_BORDER;
+  });
+}
+
+function styleDailyPerformanceHeader(row: import("exceljs").Row) {
+  row.height = Math.max(row.height ?? 0, 18);
+  row.eachCell({ includeEmpty: true }, (cell) => {
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFDDEFEA" } };
+    cell.font = { name: "Calibri", size: 10, bold: true, color: { argb: "FF000000" } };
+    cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+    cell.border = DAILY_PERFORMANCE_BORDER;
+  });
+}
+
+function styleDailyPerformanceDataRow(row: import("exceljs").Row) {
+  row.height = Math.max(row.height ?? 0, 18);
+  row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+    cell.font = { name: "Calibri", size: 10, color: { argb: "FF000000" } };
+    cell.alignment = {
+      horizontal: [4, 7].includes(colNumber) ? "left" : "center",
+      vertical: "middle",
+      wrapText: colNumber === 7,
+    };
+    cell.border = DAILY_PERFORMANCE_BORDER;
+  });
+}
+
+const DAILY_PERFORMANCE_BORDER: Partial<import("exceljs").Borders> = {
+  top: { style: "thin", color: { argb: "FF000000" } },
+  left: { style: "thin", color: { argb: "FF000000" } },
+  bottom: { style: "thin", color: { argb: "FF000000" } },
+  right: { style: "thin", color: { argb: "FF000000" } },
+};
+
+function dailyHeaderKey(header: string): string {
+  const [first, ...rest] = header.split(/\s+/);
+  return `${first.toLowerCase()}${rest.join("")}`;
+}
+
+function columnLetter(columnNumber: number): string {
+  let value = "";
+  let current = columnNumber;
+  while (current > 0) {
+    const mod = (current - 1) % 26;
+    value = String.fromCharCode(65 + mod) + value;
+    current = Math.floor((current - mod) / 26);
+  }
+  return value;
+}
+
+function addPerformanceWorksheet(
+  wb: import("exceljs").Workbook,
+  report: PerformanceReport,
+  name: string,
+  rows: Record<string, string | number>[],
+  teamName?: string,
+) {
+  const outputRows = rows.length ? rows : [{ status: "No performance data available" }];
+  const ws = wb.addWorksheet(uniqueWorksheetName(wb, name));
+  const keys = Array.from(
+    outputRows.reduce((set, row) => {
+      Object.keys(row).forEach((key) => set.add(key));
+      return set;
+    }, new Set<string>()),
+  );
+
+  ws.columns = keys.map((key) => ({
+    header: toTitleCase(key.replace(/([A-Z])/g, " $1")),
+    key,
+    width: Math.max(14, Math.min(32, key.length + 6)),
+  }));
+  outputRows.forEach((row) => ws.addRow(row));
+  ws.spliceRows(
+    1,
+    0,
+    [`${report.title} - ${teamName ? `${teamName} ` : ""}${name}`],
+    [report.description],
+  );
+  ws.mergeCells(1, 1, 1, Math.max(keys.length, 1));
+  ws.mergeCells(2, 1, 2, Math.max(keys.length, 1));
+  ws.getRow(1).font = { bold: true, size: 14 };
+  ws.getRow(2).font = { italic: true, color: { argb: "FF64748B" } };
+  ws.getRow(1).alignment = { horizontal: "center" };
+  ws.getRow(2).alignment = { horizontal: "center" };
+  ws.views = [{ state: "frozen", ySplit: 3 }];
+
+  const header = ws.getRow(3);
+  header.font = { bold: true };
+  header.alignment = { horizontal: "center" };
+  header.eachCell((cell) => {
+    cell.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FFE6F4F1" },
+    };
+    cell.border = {
+      top: { style: "thin" },
+      left: { style: "thin" },
+      bottom: { style: "thin" },
+      right: { style: "thin" },
+    };
+  });
+
+  ws.eachRow((row) => {
+    row.eachCell((cell) => {
+      cell.alignment = { vertical: "middle" };
+      cell.border = {
+        top: { style: "thin" },
+        left: { style: "thin" },
+        bottom: { style: "thin" },
+        right: { style: "thin" },
+      };
+    });
+  });
+}
+
+function performanceRowsToSheetRows(
+  rows: PerformanceRow[],
+  forcedStatus?: string,
+): Record<string, string | number>[] {
+  return rows.map((row) => ({
+    performanceStatus: forcedStatus ?? row.details?.performanceStatus ?? "",
+    team: row.teamName ?? row.details?.team ?? "",
+    employeeCode: row.employeeCode ?? row.details?.employeeCode ?? row.details?.employeeId ?? "",
+    name: row.name,
+    region: row.region ?? row.details?.region ?? "",
+    city: row.city ?? row.details?.city ?? "",
     designation: row.designation ?? row.details?.designation ?? "",
     value: row.value,
     note: row.note ?? "",
     ...(row.details ?? {}),
   }));
+}
+
+function performanceRowsToTeamSheetRows(
+  report: PerformanceTeamReport,
+): Record<string, string | number>[] {
+  const rowsByCode = new Map<string, PerformanceRow>();
+  for (const row of report.allRows) rowsByCode.set(row.employeeCode || row.name, row);
+  for (const row of report.topRows) rowsByCode.set(row.employeeCode || row.name, row);
+  for (const row of report.lowRows) rowsByCode.set(row.employeeCode || row.name, row);
+
+  const rows = [...rowsByCode.values()].sort((a, b) => {
+    const statusRank = (value: PerformanceRow) =>
+      value.details?.performanceStatus === "Top"
+        ? 0
+        : value.details?.performanceStatus === "Low" || value.value === "Failed"
+          ? 1
+          : 2;
+    return statusRank(a) - statusRank(b) || Number(b.value || 0) - Number(a.value || 0);
+  });
+
+  return [
+    ...report.summaryRows,
+    ...performanceRowsToSheetRows(rows.length ? rows : report.lowRows),
+  ];
 }
 
 function safeWorksheetName(value: string): string {
@@ -7511,6 +8139,19 @@ function safeWorksheetName(value: string): string {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 31);
+}
+
+function uniqueWorksheetName(wb: import("exceljs").Workbook, value: string): string {
+  const base = safeWorksheetName(value);
+  if (!wb.getWorksheet(base)) return base;
+
+  for (let index = 2; index < 100; index++) {
+    const suffix = ` ${index}`;
+    const candidate = `${base.slice(0, 31 - suffix.length)}${suffix}`;
+    if (!wb.getWorksheet(candidate)) return candidate;
+  }
+
+  return safeWorksheetName(`${base} ${Date.now()}`);
 }
 
 async function applySheetPreviewEdits(blob: Blob, preview: SheetPreview): Promise<Blob> {
