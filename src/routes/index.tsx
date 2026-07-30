@@ -7735,6 +7735,7 @@ function monthlyPlannedDateCell(detail?: MonthlyPlannedDayDetail): string {
     detail.totalCalls
       ? `Calls: ${detail.totalCalls}, planned ${detail.planned}, unplanned ${detail.unplanned}`
       : "Calls: 0 calls",
+    detail.activities.length ? `Activities: ${detail.activities.join("; ")}` : "",
   ]
     .filter(Boolean)
     .join("\n");

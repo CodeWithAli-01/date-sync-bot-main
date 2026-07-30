@@ -58,6 +58,7 @@ export interface MonthlyPlannedDayDetail {
   eveningMinutes: number;
   totalWorkingHours: number;
   totalWorkingMinutes: number;
+  activities: string[];
   issues: string[];
 }
 
@@ -85,6 +86,7 @@ interface MutableMonthlyDayDetail {
   eveningCalls: number;
   eveningFirstMinutes: number | null;
   eveningLastMinutes: number | null;
+  activities: string[];
 }
 
 interface MonthlyColumns {
@@ -278,8 +280,9 @@ async function readMonthlyCallLog(input: File | File[]): Promise<{
         const code = normalizeEmployeeCode(cellText(row.getCell(columns.codeCol)));
         if (!code) continue;
 
-        const meetingType = normalize(cellText(row.getCell(columns.meetingTypeCol)));
-        if (meetingType !== "face to face call" && meetingType !== "contact point") continue;
+        const meetingTypeText = cellText(row.getCell(columns.meetingTypeCol)).trim();
+        const meetingType = normalize(meetingTypeText);
+        if (!meetingType) continue;
 
         const name = cellText(row.getCell(columns.nameCol)).trim();
         const eventType = normalize(cellText(row.getCell(columns.eventTypeCol)));
@@ -318,10 +321,23 @@ async function readMonthlyCallLog(input: File | File[]): Promise<{
             row.getCell(columns.startTimeCol).value,
             cellText(row.getCell(columns.startTimeCol)),
           );
-          if (cpTime > 0) {
+          if (cpTime >= 0) {
             summary.cpTimes.push(cpTime);
             if (day)
               day.cpMinutes = day.cpMinutes === null ? cpTime : Math.min(day.cpMinutes, cpTime);
+          }
+          continue;
+        }
+
+        if (meetingType !== "face to face call") {
+          if (day) {
+            const activityTime = timeToMinutes(
+              row.getCell(columns.startTimeCol).value,
+              cellText(row.getCell(columns.startTimeCol)),
+            );
+            day.activities.push(
+              monthlyActivityText(meetingTypeText, activityTime, shift || "No shift"),
+            );
           }
           continue;
         }
@@ -339,15 +355,19 @@ async function readMonthlyCallLog(input: File | File[]): Promise<{
           summary.unplanned++;
           if (day) day.unplanned++;
         }
-        if (day && callTime > 0) {
+        if (day) {
           if (shift === "morning") {
             day.morningCalls++;
-            day.morningFirstMinutes = minNullable(day.morningFirstMinutes, callTime);
-            day.morningLastMinutes = maxNullable(day.morningLastMinutes, callTime);
+            if (callTime > 0) {
+              day.morningFirstMinutes = minNullable(day.morningFirstMinutes, callTime);
+              day.morningLastMinutes = maxNullable(day.morningLastMinutes, callTime);
+            }
           } else if (shift === "evening") {
             day.eveningCalls++;
-            day.eveningFirstMinutes = minNullable(day.eveningFirstMinutes, callTime);
-            day.eveningLastMinutes = maxNullable(day.eveningLastMinutes, callTime);
+            if (callTime > 0) {
+              day.eveningFirstMinutes = minNullable(day.eveningFirstMinutes, callTime);
+              day.eveningLastMinutes = maxNullable(day.eveningLastMinutes, callTime);
+            }
           }
         }
         summary.totalCalls = summary.planned + summary.unplanned;
@@ -568,6 +588,7 @@ function ensureMonthlyDayDetail(summary: MonthlySummary, date: string): MutableM
     eveningCalls: 0,
     eveningFirstMinutes: null,
     eveningLastMinutes: null,
+    activities: [],
   };
   summary.dailyDetails.set(date, detail);
   return detail;
@@ -619,9 +640,15 @@ function monthlyDailyDetails(summary: MonthlySummary): MonthlyPlannedDayDetail[]
         eveningMinutes,
         totalWorkingHours,
         totalWorkingMinutes,
+        activities: [...detail.activities],
         issues,
       };
     });
+}
+
+function monthlyActivityText(meetingType: string, minutes: number, shift: string): string {
+  const time = minutes >= 0 ? minutesToTime(minutes) : "N/A";
+  return `${meetingType}: ${time} (${shift})`;
 }
 
 function monthlyDayIssues(day: {
