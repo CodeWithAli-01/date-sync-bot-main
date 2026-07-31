@@ -14,6 +14,7 @@ export interface MonthlyPlannedResult {
   blob: Blob;
   fileName: string;
   sheetName: string;
+  dates: string[];
   preview: { name: string; total: number }[];
   performanceRows: MonthlyPlannedPerformanceRow[];
 }
@@ -101,6 +102,9 @@ interface MonthlyColumns {
   totalCallsCol: number;
   totalCallsAvgCol: number;
   cpAvgTimeCol: number;
+  morningWorkingAvgCol: number;
+  eveningWorkingAvgCol: number;
+  totalWorkingAvgCol: number;
 }
 
 const CALL_HEADER_HINTS: Record<string, string[]> = {
@@ -147,7 +151,7 @@ export async function processMonthlyPlannedReport(
 
   for (const sheet of sheets) {
     const summaries = filterMonthlySummariesForSheet(callLog.summaries, sheet, sheets.length > 1);
-    const result = fillMonthlyPlannedSheet(sheet, summaries);
+    const result = fillMonthlyPlannedSheet(sheet, summaries, callLog.dates);
     firstSheetName = firstSheetName || sheet.name;
     matchedEmployees += result.matchedEmployees;
     templateRows += result.templateRows;
@@ -179,12 +183,17 @@ export async function processMonthlyPlannedReport(
     blob,
     fileName: templateFile.name.replace(/\.xlsx$/i, "") + " - Monthly Planned Unplanned.xlsx",
     sheetName: firstSheetName,
+    dates: callLog.dates,
     preview: preview.sort((a, b) => b.total - a.total).slice(0, 10),
     performanceRows,
   };
 }
 
-function fillMonthlyPlannedSheet(sheet: ExcelJS.Worksheet, summaries: MonthlySummary[]) {
+function fillMonthlyPlannedSheet(
+  sheet: ExcelJS.Worksheet,
+  summaries: MonthlySummary[],
+  dates: string[],
+) {
   const summariesByCode = new Map(summaries.map((item) => [item.code, item]));
   const columns = ensureMonthlyColumns(sheet);
   const matchedKeys = new Set<string>();
@@ -203,12 +212,34 @@ function fillMonthlyPlannedSheet(sheet: ExcelJS.Worksheet, summaries: MonthlySum
     const match = summariesByCode.get(code);
     if (!match) {
       clearMonthlyCells(row, columns);
+      performanceRows.push({
+        teamName: sheet.name,
+        employeeCode: code,
+        name,
+        region: columns.regionCol ? cellText(row.getCell(columns.regionCol)) : "",
+        designation: columns.designationCol ? cellText(row.getCell(columns.designationCol)) : "",
+        planned: 0,
+        unplanned: 0,
+        totalCalls: 0,
+        plannedPercent: 0,
+        cpAvgTime: "",
+        dailyDetails: [],
+        lateCpDays: 0,
+        lowCallDays: 0,
+        missingShiftDays: 0,
+        lowWorkingHourDays: 0,
+        lowReasons: dates.length ? ["No call log data"] : [],
+        topQualified: false,
+        lowQualified: false,
+      });
       continue;
     }
 
     const days = match.days.size;
     matchedEmployees++;
     matchedKeys.add(monthlySummaryKey(match));
+
+    const dailyDetails = monthlyDailyDetails(match);
 
     row.getCell(columns.plannedCol).value = match.planned;
     row.getCell(columns.plannedAvgCol).value = average(match.planned, days);
@@ -217,9 +248,17 @@ function fillMonthlyPlannedSheet(sheet: ExcelJS.Worksheet, summaries: MonthlySum
     row.getCell(columns.totalCallsCol).value = match.totalCalls;
     row.getCell(columns.totalCallsAvgCol).value = average(match.totalCalls, days);
     row.getCell(columns.cpAvgTimeCol).value = averageTime(match.cpTimes);
+    row.getCell(columns.morningWorkingAvgCol).value = averageWorkingTime(
+      dailyDetails.map((detail) => detail.morningMinutes),
+    );
+    row.getCell(columns.eveningWorkingAvgCol).value = averageWorkingTime(
+      dailyDetails.map((detail) => detail.eveningMinutes),
+    );
+    row.getCell(columns.totalWorkingAvgCol).value = averageWorkingTime(
+      dailyDetails.map((detail) => detail.totalWorkingMinutes),
+    );
     styleMonthlyCells(row, columns);
 
-    const dailyDetails = monthlyDailyDetails(match);
     const issueCounts = monthlyIssueCounts(dailyDetails);
     const lowReasons = monthlyLowReasons(issueCounts);
     if (match.totalCalls > 0) preview.push({ name: name || match.name, total: match.totalCalls });
@@ -250,12 +289,14 @@ function fillMonthlyPlannedSheet(sheet: ExcelJS.Worksheet, summaries: MonthlySum
 
 async function readMonthlyCallLog(input: File | File[]): Promise<{
   summaries: MonthlySummary[];
+  dates: string[];
   sourceRows: number;
   faceToFaceRows: number;
   contactPointRows: number;
 }> {
   const files = Array.isArray(input) ? input : [input];
   const byCode = new Map<string, MonthlySummary>();
+  const dates = new Set<string>();
   let sourceRows = 0;
   let faceToFaceRows = 0;
   let contactPointRows = 0;
@@ -312,7 +353,10 @@ async function readMonthlyCallLog(input: File | File[]): Promise<{
         }
 
         sourceRows++;
-        if (dateKey) summary.days.add(dateKey);
+        if (dateKey) {
+          summary.days.add(dateKey);
+          dates.add(dateKey);
+        }
         const day = dateKey ? ensureMonthlyDayDetail(summary, dateKey) : null;
 
         if (meetingType === "contact point") {
@@ -367,7 +411,13 @@ async function readMonthlyCallLog(input: File | File[]): Promise<{
     }
   }
 
-  return { summaries: [...byCode.values()], sourceRows, faceToFaceRows, contactPointRows };
+  return {
+    summaries: [...byCode.values()],
+    dates: [...dates].sort((a, b) => a.localeCompare(b)),
+    sourceRows,
+    faceToFaceRows,
+    contactPointRows,
+  };
 }
 
 function filterMonthlySummariesForSheet(
@@ -453,6 +503,9 @@ function ensureMonthlyColumns(sheet: ExcelJS.Worksheet): MonthlyColumns {
       ["totalCallsCol", "Total Calls"],
       ["totalCallsAvgCol", "Total Calls Avg"],
       ["cpAvgTimeCol", "CP Avg Time"],
+      ["morningWorkingAvgCol", "Morning Working Avg"],
+      ["eveningWorkingAvgCol", "Evening Working Avg"],
+      ["totalWorkingAvgCol", "Total Working Avg"],
     ];
 
     const result: MonthlyColumns = {
@@ -467,6 +520,9 @@ function ensureMonthlyColumns(sheet: ExcelJS.Worksheet): MonthlyColumns {
       totalCallsCol: 0,
       totalCallsAvgCol: 0,
       cpAvgTimeCol: 0,
+      morningWorkingAvgCol: 0,
+      eveningWorkingAvgCol: 0,
+      totalWorkingAvgCol: 0,
     };
 
     const titleRow = sheet.getRow(Math.max(1, rowNumber - 1));
@@ -495,11 +551,17 @@ function clearMonthlyCells(row: ExcelJS.Row, columns: MonthlyColumns) {
 }
 
 function styleMonthlyCells(row: ExcelJS.Row, columns: MonthlyColumns) {
+  const textColumns = new Set([
+    columns.cpAvgTimeCol,
+    columns.morningWorkingAvgCol,
+    columns.eveningWorkingAvgCol,
+    columns.totalWorkingAvgCol,
+  ]);
   for (const col of monthlyValueColumns(columns)) {
     const cell = row.getCell(col);
     cell.alignment = { ...(cell.alignment ?? {}), horizontal: "center", vertical: "middle" };
     cell.border = thinBorder();
-    if (col !== columns.cpAvgTimeCol) cell.numFmt = "0";
+    if (!textColumns.has(col)) cell.numFmt = "0";
   }
 }
 
@@ -512,6 +574,9 @@ function monthlyValueColumns(columns: MonthlyColumns): number[] {
     columns.totalCallsCol,
     columns.totalCallsAvgCol,
     columns.cpAvgTimeCol,
+    columns.morningWorkingAvgCol,
+    columns.eveningWorkingAvgCol,
+    columns.totalWorkingAvgCol,
   ];
 }
 
@@ -723,6 +788,16 @@ function averageTime(minutes: number[]): string {
     minutes.reduce((sum, minute) => sum + minute, 0) / minutes.length,
   );
   return minutesToTime(averageMinutes);
+}
+
+function averageWorkingTime(minutes: number[]): string {
+  if (!minutes.length) return "";
+  const averageMinutes = Math.round(
+    minutes.reduce((sum, minute) => sum + minute, 0) / minutes.length,
+  );
+  const hours = Math.floor(averageMinutes / 60);
+  const mins = averageMinutes % 60;
+  return `${hours} ${hours === 1 ? "hour" : "hours"} ${mins} min`;
 }
 
 function minutesToTimeOrBlank(totalMinutes: number | null): string {

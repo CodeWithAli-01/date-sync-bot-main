@@ -154,6 +154,7 @@ interface PerformanceReport {
   fileName: string;
   sourceBlob?: Blob;
   allRows?: PerformanceRow[];
+  monthlyPlannedDates?: string[];
   topRows: PerformanceRow[];
   lowRows: PerformanceRow[];
   summaryRows: Record<string, string | number>[];
@@ -5842,8 +5843,9 @@ function buildMonthlyPlannedPerformanceReport(report: MonthlyPlannedResult): Per
     variant: "monthly-planned",
     title: "Monthly Planned Unplanned Performance",
     description:
-      "Low: more than 10 days with late CP, 5 or fewer calls, missing morning/evening, or 5 or fewer working hours.",
+      "Shows every employee from the sample file with month-wise planned/unplanned performance details.",
     fileName: report.fileName.replace(/\.xlsx$/i, "") + " - Performance.xlsx",
+    monthlyPlannedDates: report.dates,
     allRows: rows,
     topRows: rows
       .filter((row) => row.topQualified)
@@ -7623,16 +7625,12 @@ async function buildMonthlyPlannedPerformanceWorkbook(
   wb.creator = APP_NAME;
   wb.created = new Date();
 
-  const lowRows = report.lowRows.filter((row) => row.monthlyPlannedDailyDetails?.length);
+  const performanceRows = (report.allRows ?? report.lowRows).filter(
+    (row) => row.employeeCode || row.details?.employeeCode,
+  );
+  const reportDates = report.monthlyPlannedDates ?? monthlyPlannedDates(performanceRows);
   const rowsByTeam = new Map<string, PerformanceRow[]>();
-  const allRowsByTeam = new Map<string, PerformanceRow[]>();
-  for (const row of report.allRows ?? []) {
-    const teamName = row.teamName || String(row.details?.team ?? "").trim() || "Team";
-    const teamRows = allRowsByTeam.get(teamName) ?? [];
-    teamRows.push(row);
-    allRowsByTeam.set(teamName, teamRows);
-  }
-  for (const row of lowRows) {
+  for (const row of performanceRows) {
     const teamName = row.teamName || String(row.details?.team ?? "").trim() || "Team";
     const teamRows = rowsByTeam.get(teamName) ?? [];
     teamRows.push(row);
@@ -7640,7 +7638,7 @@ async function buildMonthlyPlannedPerformanceWorkbook(
   }
 
   if (!rowsByTeam.size) {
-    addMonthlyPlannedTeamPerformanceWorksheet(wb, "Low Performance", []);
+    addMonthlyPlannedTeamPerformanceWorksheet(wb, "All Performance", [], reportDates);
   } else {
     for (const [teamName, teamRows] of [...rowsByTeam.entries()].sort(([a], [b]) =>
       a.localeCompare(b),
@@ -7648,8 +7646,8 @@ async function buildMonthlyPlannedPerformanceWorkbook(
       addMonthlyPlannedTeamPerformanceWorksheet(
         wb,
         teamName,
-        teamRows.sort((a, b) => Number(b.value || 0) - Number(a.value || 0)),
-        monthlyPlannedDates(allRowsByTeam.get(teamName) ?? teamRows),
+        teamRows.sort((a, b) => String(a.name).localeCompare(String(b.name))),
+        reportDates,
       );
     }
   }
@@ -7681,7 +7679,7 @@ function addMonthlyPlannedTeamPerformanceWorksheet(
   ws.mergeCells(1, 1, 1, headers.length);
   ws.mergeCells(2, 1, 2, headers.length);
   ws.getCell(1, 1).value = teamName;
-  ws.getCell(2, 1).value = "Low performance";
+  ws.getCell(2, 1).value = "All performance";
   ws.getRow(1).height = 28.5;
   ws.getRow(2).height = 21;
   styleDailyPerformanceTitleRow(ws.getRow(1), 16);
@@ -7691,7 +7689,7 @@ function addMonthlyPlannedTeamPerformanceWorksheet(
   styleDailyPerformanceHeader(ws.getRow(3));
 
   if (!rows.length) {
-    setPlainWorksheetRow(ws, 4, ["No low performance data available"]);
+    setPlainWorksheetRow(ws, 4, ["No performance data available"]);
     styleMonthlyPlannedDataRow(ws.getRow(4), headers.length);
   } else {
     rows.forEach((row, index) => {
