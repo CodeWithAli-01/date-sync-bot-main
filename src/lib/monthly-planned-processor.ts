@@ -329,33 +329,25 @@ async function readMonthlyCallLog(input: File | File[]): Promise<{
           continue;
         }
 
-        if (meetingType !== "face to face call") {
-          if (day) {
-            const activityTime = timeToMinutes(
-              row.getCell(columns.startTimeCol).value,
-              cellText(row.getCell(columns.startTimeCol)),
-            );
-            day.activities.push(
-              monthlyActivityText(meetingTypeText, activityTime, shift || "No shift"),
-            );
-          }
-          continue;
-        }
-
-        faceToFaceRows++;
         const callTime = timeToMinutes(
           row.getCell(columns.startTimeCol).value,
           cellText(row.getCell(columns.startTimeCol)),
         );
-        if (eventType === "planned") {
+        const isPlannedCall = eventType === "planned";
+        const isUnplannedCall = eventType === "unplanned";
+        if (meetingType === "face to face call") faceToFaceRows++;
+        if (meetingType !== "face to face call" && day) {
+          day.activities.push(monthlyActivityText(meetingTypeText, callTime, shift || "No shift"));
+        }
+        if (isPlannedCall) {
           summary.planned++;
           if (day) day.planned++;
         }
-        if (eventType === "unplanned") {
+        if (isUnplannedCall) {
           summary.unplanned++;
           if (day) day.unplanned++;
         }
-        if (day) {
+        if (day && (isPlannedCall || isUnplannedCall)) {
           if (shift === "morning") {
             day.morningCalls++;
             if (callTime > 0) {

@@ -6,6 +6,8 @@ export interface PdfRow {
   name: string;
   planned: number;
   unplanned: number;
+  cpTime: string;
+  cpMinutes: number | null;
   count: number;
   selfieText: string;
   total: number;
@@ -212,6 +214,51 @@ function extractDailyCallMetrics(text: string): {
   return { planned: 0, unplanned: 0, total };
 }
 
+function parseTimeToMinutes(
+  hourText: string,
+  minuteText: string,
+  meridiem?: string,
+): number | null {
+  let hour = parseInt(hourText, 10);
+  const minute = parseInt(minuteText, 10);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute) || minute > 59) return null;
+
+  const normalizedMeridiem = meridiem?.toUpperCase();
+  if (normalizedMeridiem) {
+    if (hour < 0 || hour > 12) return null;
+    if (normalizedMeridiem === "AM") {
+      if (hour === 12) hour = 0;
+    } else if (hour !== 12) {
+      hour += 12;
+    }
+  } else if (hour > 23) {
+    return null;
+  }
+
+  return hour * 60 + minute;
+}
+
+function formatTime(minutes: number): string {
+  const normalized = ((minutes % 1440) + 1440) % 1440;
+  const hour24 = Math.floor(normalized / 60);
+  const minute = normalized % 60;
+  const meridiem = hour24 >= 12 ? "PM" : "AM";
+  const hour12 = hour24 % 12 || 12;
+  return `${hour12}:${String(minute).padStart(2, "0")} ${meridiem}`;
+}
+
+function extractCpTime(text: string): { cpTime: string; cpMinutes: number | null } {
+  const matches = [...text.matchAll(/\b(\d{1,2})\s*:\s*(\d{2})\s*([AP]M)?\b/gi)];
+
+  for (const match of matches) {
+    const minutes = parseTimeToMinutes(match[1], match[2], match[3]);
+    if (minutes == null) continue;
+    return { cpTime: formatTime(minutes), cpMinutes: minutes };
+  }
+
+  return { cpTime: "", cpMinutes: null };
+}
+
 function extractRowStart(line: string): { code: string; rest: string } | null {
   const trimmed = line.replace(/\s+/g, " ").trim();
   if (!trimmed || /\b(employee|emp|code|name|total|region|city)\b/i.test(trimmed.slice(0, 35))) {
@@ -347,6 +394,7 @@ export async function parsePdf(file: File): Promise<PdfParseResult> {
   for (const detected of detectedRows) {
     const metrics = extractDailyCallMetrics(detected.text);
     const total = metrics.total || extractTotalValue(detected.text, detected.items, totalX);
+    const cp = extractCpTime(detected.text);
     const count = extractSelfieCount(detected.text) ?? total;
     const selfieText = extractSelfieText(detected.text, count);
     const name = cleanName(detected.text) || detected.code;
@@ -359,6 +407,8 @@ export async function parsePdf(file: File): Promise<PdfParseResult> {
         name: existing.name || name,
         planned: Math.max(existing.planned, metrics.planned),
         unplanned: Math.max(existing.unplanned, metrics.unplanned),
+        cpTime: existing.cpTime || cp.cpTime,
+        cpMinutes: existing.cpMinutes ?? cp.cpMinutes,
         count: Math.max(existing.count, count),
         selfieText: chooseBetterSelfieText(existing.selfieText, selfieText),
         total: Math.max(existing.total, total),
@@ -371,6 +421,8 @@ export async function parsePdf(file: File): Promise<PdfParseResult> {
       name,
       planned: metrics.planned,
       unplanned: metrics.unplanned,
+      cpTime: cp.cpTime,
+      cpMinutes: cp.cpMinutes,
       count,
       selfieText,
       total,

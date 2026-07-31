@@ -212,11 +212,18 @@ interface MonthlyTotalCols {
   callsAvgCol: number;
   selfiesCol: number;
   selfiesAvgCol: number;
+  plannedCol: number;
+  plannedAvgCol: number;
+  unplannedCol: number;
+  unplannedAvgCol: number;
+  cpAvgCol: number;
 }
 
 interface MatchValue {
   planned: number;
   unplanned: number;
+  cpTime: string;
+  cpMinutes: number | null;
   selfies: number;
   selfieText: string;
   total: number;
@@ -670,6 +677,11 @@ function findMonthlyTotalColumns(ws: ExcelJS.Worksheet, headerRow: number): Mont
   let callsAvgCol = 0;
   let selfiesCol = 0;
   let selfiesAvgCol = 0;
+  let plannedCol = 0;
+  let plannedAvgCol = 0;
+  let unplannedCol = 0;
+  let unplannedAvgCol = 0;
+  let cpAvgCol = 0;
   for (let c = 1; c <= Math.max(lastUsed + 2, header.cellCount || 0); c++) {
     const top = normalize(cellText(dateHeader.getCell(c)));
     const label = normalize(cellText(header.getCell(c)));
@@ -688,6 +700,27 @@ function findMonthlyTotalColumns(ws: ExcelJS.Worksheet, headerRow: number): Mont
     ) {
       selfiesAvgCol = c;
     }
+    if (
+      ["total planned", "total planned calls", "planned total", "planned calls"].includes(label)
+    ) {
+      plannedCol = c;
+    }
+    if (["planned avg", "planned calls avg", "total planned avg"].includes(label)) {
+      plannedAvgCol = c;
+    }
+    if (
+      ["total unplanned", "total unplanned calls", "unplanned total", "unplanned calls"].includes(
+        label,
+      )
+    ) {
+      unplannedCol = c;
+    }
+    if (["unplanned avg", "unplanned calls avg", "total unplanned avg"].includes(label)) {
+      unplannedAvgCol = c;
+    }
+    if (["cp avg time", "cp average time", "cp avg", "cp average"].includes(label)) {
+      cpAvgCol = c;
+    }
   }
 
   if (callsCol && selfiesCol && !callsAvgCol && selfiesCol === callsCol + 1) {
@@ -695,16 +728,46 @@ function findMonthlyTotalColumns(ws: ExcelJS.Worksheet, headerRow: number): Mont
     callsAvgCol = selfiesCol;
     selfiesCol += 1;
     if (selfiesAvgCol >= callsAvgCol) selfiesAvgCol += 1;
+    if (plannedCol >= callsAvgCol) plannedCol += 1;
+    if (plannedAvgCol >= callsAvgCol) plannedAvgCol += 1;
+    if (unplannedCol >= callsAvgCol) unplannedCol += 1;
+    if (unplannedAvgCol >= callsAvgCol) unplannedAvgCol += 1;
+    if (cpAvgCol >= callsAvgCol) cpAvgCol += 1;
   }
 
-  const existingCols = [callsCol, callsAvgCol, selfiesCol, selfiesAvgCol].filter(Boolean);
+  const existingCols = [
+    callsCol,
+    callsAvgCol,
+    selfiesCol,
+    selfiesAvgCol,
+    plannedCol,
+    plannedAvgCol,
+    unplannedCol,
+    unplannedAvgCol,
+    cpAvgCol,
+  ].filter(Boolean);
   let nextCol = existingCols.length ? Math.max(...existingCols) + 1 : lastUsed + 1;
   if (!callsCol) callsCol = nextCol++;
   if (!callsAvgCol) callsAvgCol = nextCol++;
   if (!selfiesCol) selfiesCol = nextCol++;
   if (!selfiesAvgCol) selfiesAvgCol = nextCol++;
+  if (!plannedCol) plannedCol = nextCol++;
+  if (!plannedAvgCol) plannedAvgCol = nextCol++;
+  if (!unplannedCol) unplannedCol = nextCol++;
+  if (!unplannedAvgCol) unplannedAvgCol = nextCol++;
+  if (!cpAvgCol) cpAvgCol = nextCol++;
 
-  for (const col of [callsCol, callsAvgCol, selfiesCol, selfiesAvgCol]) {
+  for (const col of [
+    callsCol,
+    callsAvgCol,
+    selfiesCol,
+    selfiesAvgCol,
+    plannedCol,
+    plannedAvgCol,
+    unplannedCol,
+    unplannedAvgCol,
+    cpAvgCol,
+  ]) {
     const topCell = dateHeader.getCell(col);
     topCell.value = "Total Monthly";
     styleHeader(topCell);
@@ -715,6 +778,11 @@ function findMonthlyTotalColumns(ws: ExcelJS.Worksheet, headerRow: number): Mont
     [callsAvgCol, "Total Calls Avg"],
     [selfiesCol, "Total Selfies"],
     [selfiesAvgCol, "Total Selfies Avg"],
+    [plannedCol, "Total Planned"],
+    [plannedAvgCol, "Planned Avg"],
+    [unplannedCol, "Total Unplanned"],
+    [unplannedAvgCol, "Unplanned Avg"],
+    [cpAvgCol, "CP Avg Time"],
   ];
 
   for (const [col, label] of labels) {
@@ -726,7 +794,17 @@ function findMonthlyTotalColumns(ws: ExcelJS.Worksheet, headerRow: number): Mont
 
   dateHeader.commit?.();
   header.commit?.();
-  return { callsCol, callsAvgCol, selfiesCol, selfiesAvgCol };
+  return {
+    callsCol,
+    callsAvgCol,
+    selfiesCol,
+    selfiesAvgCol,
+    plannedCol,
+    plannedAvgCol,
+    unplannedCol,
+    unplannedAvgCol,
+    cpAvgCol,
+  };
 }
 
 function sumFormula(cols: number[], rowNumber: number): string | null {
@@ -759,34 +837,52 @@ function rowAverage(ws: ExcelJS.Worksheet, cols: number[], rowNumber: number): n
   return Math.round(rowSum(ws, cols, rowNumber) / cols.length);
 }
 
+function formatCpAverageTime(minutes: number): string {
+  const normalized = ((minutes % 1440) + 1440) % 1440;
+  const hour24 = Math.floor(normalized / 60);
+  const minute = normalized % 60;
+  const meridiem = hour24 >= 12 ? "PM" : "AM";
+  const hour12 = hour24 % 12 || 12;
+  return `${hour12}:${String(minute).padStart(2, "0")} ${meridiem}`;
+}
+
+function averageCpTime(
+  matches: Map<string, MatchValue> | undefined,
+  dates: string[],
+): string | null {
+  const values = dates
+    .map((date) => matches?.get(date)?.cpMinutes)
+    .filter((minutes): minutes is number => typeof minutes === "number");
+  if (!values.length) return null;
+  return formatCpAverageTime(
+    Math.round(values.reduce((sum, minutes) => sum + minutes, 0) / values.length),
+  );
+}
+
 function fillMonthlyTotals(
   ws: ExcelJS.Worksheet,
   dataStartRow: number,
   dataEndRow: number,
   monthlyTotals: MonthlyTotalCols,
   datePairs: Map<string, DatePairCols>,
+  cpAverageByRow: Map<number, string | null> = new Map(),
 ) {
   const orderedPairs = [...datePairs.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([, pair]) => pair);
+  const monthlyTotalCols = new Set(Object.values(monthlyTotals));
   const callCols = orderedPairs
     .map((pair) => pair.callsCol ?? pair.totalCol)
-    .filter(
-      (col) =>
-        col !== monthlyTotals.callsCol &&
-        col !== monthlyTotals.callsAvgCol &&
-        col !== monthlyTotals.selfiesCol &&
-        col !== monthlyTotals.selfiesAvgCol,
-    );
+    .filter((col) => !monthlyTotalCols.has(col));
   const selfieCols = orderedPairs
     .map((pair) => pair.selfiesCol)
-    .filter(
-      (col) =>
-        col !== monthlyTotals.callsCol &&
-        col !== monthlyTotals.callsAvgCol &&
-        col !== monthlyTotals.selfiesCol &&
-        col !== monthlyTotals.selfiesAvgCol,
-    );
+    .filter((col) => !monthlyTotalCols.has(col));
+  const plannedCols = orderedPairs
+    .map((pair) => pair.plannedCol)
+    .filter((col): col is number => Boolean(col) && !monthlyTotalCols.has(col));
+  const unplannedCols = orderedPairs
+    .map((pair) => pair.unplannedCol)
+    .filter((col): col is number => Boolean(col) && !monthlyTotalCols.has(col));
 
   for (let r = dataStartRow; r <= dataEndRow; r++) {
     const row = ws.getRow(r);
@@ -817,6 +913,40 @@ function fillMonthlyTotals(
       ? { formula: selfiesAvgFormula, result: selfiesAvgResult }
       : null;
     styleBodyCell(selfiesAvgCell);
+
+    const plannedCell = row.getCell(monthlyTotals.plannedCol);
+    const plannedFormula = sumFormula(plannedCols, r);
+    const plannedResult = rowSum(ws, plannedCols, r);
+    plannedCell.value = plannedFormula ? { formula: plannedFormula, result: plannedResult } : null;
+    styleBodyCell(plannedCell);
+
+    const plannedAvgCell = row.getCell(monthlyTotals.plannedAvgCol);
+    const plannedAvgFormula = averageFormula(plannedCols, r);
+    const plannedAvgResult = rowAverage(ws, plannedCols, r);
+    plannedAvgCell.value = plannedAvgFormula
+      ? { formula: plannedAvgFormula, result: plannedAvgResult }
+      : null;
+    styleBodyCell(plannedAvgCell);
+
+    const unplannedCell = row.getCell(monthlyTotals.unplannedCol);
+    const unplannedFormula = sumFormula(unplannedCols, r);
+    const unplannedResult = rowSum(ws, unplannedCols, r);
+    unplannedCell.value = unplannedFormula
+      ? { formula: unplannedFormula, result: unplannedResult }
+      : null;
+    styleBodyCell(unplannedCell);
+
+    const unplannedAvgCell = row.getCell(monthlyTotals.unplannedAvgCol);
+    const unplannedAvgFormula = averageFormula(unplannedCols, r);
+    const unplannedAvgResult = rowAverage(ws, unplannedCols, r);
+    unplannedAvgCell.value = unplannedAvgFormula
+      ? { formula: unplannedAvgFormula, result: unplannedAvgResult }
+      : null;
+    styleBodyCell(unplannedAvgCell);
+
+    const cpAvgCell = row.getCell(monthlyTotals.cpAvgCol);
+    cpAvgCell.value = cpAverageByRow.get(r) ?? null;
+    styleBodyCell(cpAvgCell);
     row.commit?.();
   }
 }
@@ -1011,6 +1141,8 @@ function fillMonthlyReportSheet(
         dateMap.set(pdf.date, {
           planned: row.planned,
           unplanned: row.unplanned,
+          cpTime: row.cpTime,
+          cpMinutes: row.cpMinutes,
           selfies: row.count,
           selfieText: row.selfieText,
           total: row.total,
@@ -1020,6 +1152,8 @@ function fillMonthlyReportSheet(
           ...existing,
           planned: row.planned,
           unplanned: row.unplanned,
+          cpTime: existing.cpTime || row.cpTime,
+          cpMinutes: existing.cpMinutes ?? row.cpMinutes,
           total: row.total,
         });
       }
@@ -1085,7 +1219,17 @@ function fillMonthlyReportSheet(
 
   const finalDataEndRow = appendUnmatchedRows(ws, det, unmatchedRows, datePairs);
   const monthlyTotals = findMonthlyTotalColumns(ws, det.headerRow);
-  fillMonthlyTotals(ws, det.dataStartRow, finalDataEndRow, monthlyTotals, datePairs);
+  const cpAverageByRow = new Map(
+    empTotals.map((emp) => [emp.row, averageCpTime(matchByEmp.get(emp.idx), dates)] as const),
+  );
+  fillMonthlyTotals(
+    ws,
+    det.dataStartRow,
+    finalDataEndRow,
+    monthlyTotals,
+    datePairs,
+    cpAverageByRow,
+  );
   applyBordersAndWidths(
     ws,
     det.headerRow,
@@ -1411,6 +1555,8 @@ export async function processExcel(
         dateMap.set(pdf.date, {
           planned: row.planned,
           unplanned: row.unplanned,
+          cpTime: row.cpTime,
+          cpMinutes: row.cpMinutes,
           selfies: row.count,
           selfieText: row.selfieText,
           total: row.total,
@@ -1420,6 +1566,8 @@ export async function processExcel(
           ...existing,
           planned: row.planned,
           unplanned: row.unplanned,
+          cpTime: existing.cpTime || row.cpTime,
+          cpMinutes: existing.cpMinutes ?? row.cpMinutes,
           total: row.total,
         });
       }
@@ -1485,7 +1633,17 @@ export async function processExcel(
 
   const finalDataEndRow = appendUnmatchedRows(ws, det, unmatchedRows, datePairs);
   const monthlyTotals = findMonthlyTotalColumns(ws, det.headerRow);
-  fillMonthlyTotals(ws, det.dataStartRow, finalDataEndRow, monthlyTotals, datePairs);
+  const cpAverageByRow = new Map(
+    empTotals.map((emp) => [emp.row, averageCpTime(matchByEmp.get(emp.idx), dates)] as const),
+  );
+  fillMonthlyTotals(
+    ws,
+    det.dataStartRow,
+    finalDataEndRow,
+    monthlyTotals,
+    datePairs,
+    cpAverageByRow,
+  );
 
   applyBordersAndWidths(
     ws,
