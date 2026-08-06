@@ -39,15 +39,20 @@ export interface DailyPerformanceRow {
   unplanned: number;
   morningCalls: number;
   morningHours: number;
+  morningMinutes: number;
+  morningFirstCall: string;
   morningLastCall: string;
   eveningCalls: number;
   eveningHours: number;
+  eveningMinutes: number;
   eveningFirstCall: string;
   eveningLastCall: string;
   totalWorkingHours: number;
+  totalWorkingMinutes: number;
   totalCalls: number;
   selfies: number;
   cpTime: string;
+  remarks: string;
   plannedPercent: number;
   topQualified: boolean;
   lowQualified: boolean;
@@ -498,13 +503,22 @@ function processDailySheet(
       }
     }
     const performanceSelfies = match.selfies ?? 0;
-    const morningHours = dailyShiftHours(
+    const morningMinutes = dailyShiftMinutes(
       match.cpMinutes,
       match.morningFirstMinutes,
       match.morningLastMinutes,
+      match.morning,
     );
-    const eveningHours = dailyShiftHours(null, match.eveningFirstMinutes, match.eveningLastMinutes);
-    const totalWorkingHours = roundHours(morningHours + eveningHours);
+    const eveningMinutes = dailyShiftMinutes(
+      null,
+      match.eveningFirstMinutes,
+      match.eveningLastMinutes,
+      match.evening,
+    );
+    const morningHours = roundHours(morningMinutes / 60);
+    const eveningHours = roundHours(eveningMinutes / 60);
+    const totalWorkingMinutes = morningMinutes + eveningMinutes;
+    const totalWorkingHours = roundHours(totalWorkingMinutes / 60);
     if (match.total > 0) preview.push({ name: name || match.name, total: match.total });
     performanceRows.push({
       teamName: rowTeamName || match.teamName || sheet.name,
@@ -519,15 +533,20 @@ function processDailySheet(
       unplanned: match.unplanned,
       morningCalls: match.morning,
       morningHours,
+      morningMinutes,
+      morningFirstCall: formatMinutes(match.morningFirstMinutes),
       morningLastCall: formatMinutes(match.morningLastMinutes),
       eveningCalls: match.evening,
       eveningHours,
+      eveningMinutes,
       eveningFirstCall: formatMinutes(match.eveningFirstMinutes),
       eveningLastCall: formatMinutes(match.eveningLastMinutes),
       totalWorkingHours,
+      totalWorkingMinutes,
       totalCalls: match.total,
       selfies: performanceSelfies,
       cpTime: match.cpTime,
+      remarks: formatRemarks(match.remarks),
       plannedPercent: percent(match.planned, match.total),
       topQualified: match.total >= 12 && morningHours >= 4 && eveningHours >= 3,
       lowQualified: match.total <= 5 || match.morning === 0 || match.evening === 0,
@@ -796,7 +815,7 @@ function readCallLogSheet(
       ? normalizeDateKey(row.getCell(columns.dateCol).value, cellText(row.getCell(columns.dateCol)))
       : "";
     if (dateKey) summary.dates.add(dateKey);
-    if (meetingType === "contact point") {
+    if (isContactPointMeeting(meetingType)) {
       contactPointRows++;
       if (startTimeInfo.minutes !== null) {
         summary.cpMinutes =
@@ -1208,15 +1227,29 @@ function extractDailyRemarks(meetingTypeText: string): string[] {
   const normalizedMeetingType = normalizeRemarkText(meetingTypeText);
   if (!normalizedMeetingType) return [];
 
-  return DAILY_REMARK_KEYWORDS.filter((keyword) =>
+  const keywordRemarks = DAILY_REMARK_KEYWORDS.filter((keyword) =>
     new RegExp(`(^|\\s)${escapeRegExp(normalizeRemarkText(keyword))}(?=\\s|$)`).test(
       normalizedMeetingType,
     ),
   );
+  if (keywordRemarks.length) return keywordRemarks;
+
+  if (
+    normalizedMeetingType === "face to face call" ||
+    isContactPointMeeting(normalizedMeetingType)
+  ) {
+    return [];
+  }
+
+  return [toTitleCase(normalizedMeetingType)];
 }
 
 function formatRemarks(remarks: Set<string>): string {
-  return DAILY_REMARK_KEYWORDS.filter((keyword) => remarks.has(keyword)).join(", ");
+  const knownRemarks = new Set<string>(DAILY_REMARK_KEYWORDS);
+  return [
+    ...DAILY_REMARK_KEYWORDS.filter((keyword) => remarks.has(keyword)),
+    ...[...remarks].filter((remark) => !knownRemarks.has(remark)),
+  ].join(", ");
 }
 
 function normalizeRemarkText(value: string): string {
@@ -1229,6 +1262,10 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function toTitleCase(value: string): string {
+  return value.replace(/\b[a-z]/g, (letter) => letter.toUpperCase());
+}
+
 function percent(part: number, total: number): number {
   return total > 0 ? Math.round((part / total) * 100) : 0;
 }
@@ -1238,17 +1275,28 @@ function isTimeOnOrBefore(value: string, maxMinutes: number): boolean {
   return minutes !== null && minutes <= maxMinutes;
 }
 
-function dailyShiftHours(
+function dailyShiftMinutes(
   preferredStartMinutes: number | null,
   firstCallMinutes: number | null,
   lastCallMinutes: number | null,
+  callCount: number,
 ): number {
   const end = lastCallMinutes;
   if (end === null) return 0;
 
   const start = preferredStartMinutes ?? firstCallMinutes;
-  if (start === null || end <= start) return 0;
-  return roundHours((end - start) / 60);
+  if (start === null) return 0;
+  if (end <= start) return callCount > 0 ? 1 : 0;
+  return end - start;
+}
+
+function isContactPointMeeting(meetingType: string): boolean {
+  return (
+    meetingType === "contact point" ||
+    meetingType === "cp" ||
+    meetingType.includes("contact point") ||
+    meetingType.includes("cp punch")
+  );
 }
 
 function updateShiftWindow(

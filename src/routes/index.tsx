@@ -5874,13 +5874,13 @@ function buildDailyPerformanceReport(report: DailyReportResult): PerformanceRepo
       "Top: 12 total calls with 4+ morning hours and 3+ evening hours. Low: 5 or fewer total calls, or missing morning/evening shift.",
     fileName: report.fileName.replace(/\.xlsx$/i, "") + " - Performance.xlsx",
     sourceBlob: report.blob,
-    allRows: rows,
+    allRows: sortDailyAllRows(rows),
     topRows: rows
       .filter((row) => row.topQualified)
       .sort((a, b) => Number(b.value) - Number(a.value)),
     lowRows: [
+      ...sortDailyLowRows(rows.filter((row) => row.lowQualified)),
       ...buildReviewRows(report.unmatchedEmployees),
-      ...rows.filter((row) => row.lowQualified).sort((a, b) => Number(a.value) - Number(b.value)),
     ],
     summaryRows: [
       {
@@ -5934,7 +5934,7 @@ function buildBulkDailyPerformanceReport(report: BulkDailyReportResult): Perform
         .sort((a, b) => Number(b.value) - Number(a.value)),
       lowRows: teamRows
         .filter((row) => row.lowQualified)
-        .sort((a, b) => Number(a.value) - Number(b.value))
+        .sort(compareDailyLowRows)
         .concat(teamFailedRows),
       summaryRows: teamSummary
         ? [
@@ -6049,14 +6049,19 @@ function dailyPerformanceRows(
       city: row.city,
       designation: row.designation,
       cpTime: row.cpTime,
+      remarks: row.remarks,
       morningCalls: row.morningCalls,
       morningHours: row.morningHours,
+      morningMinutes: row.morningMinutes,
+      morningFirstCall: row.morningFirstCall,
       morningLastCall: row.morningLastCall,
       eveningCalls: row.eveningCalls,
       eveningHours: row.eveningHours,
+      eveningMinutes: row.eveningMinutes,
       eveningFirstCall: row.eveningFirstCall,
       eveningLastCall: row.eveningLastCall,
       totalWorkingHours: row.totalWorkingHours,
+      totalWorkingMinutes: row.totalWorkingMinutes,
       totalCalls: row.totalCalls,
       plannedCalls: row.planned,
       unplannedCalls: row.unplanned,
@@ -6067,6 +6072,45 @@ function dailyPerformanceRows(
     topQualified: row.topQualified,
     lowQualified: row.lowQualified,
   }));
+}
+
+function sortDailyLowRows(rows: PerformanceRow[]): PerformanceRow[] {
+  return [...rows].sort(compareDailyLowRows);
+}
+
+function sortDailyAllRows(rows: PerformanceRow[]): PerformanceRow[] {
+  return [...rows].sort((a, b) => {
+    const aIsLow = a.details?.performanceStatus === "Low";
+    const bIsLow = b.details?.performanceStatus === "Low";
+    if (aIsLow && bIsLow) return compareDailyLowRows(a, b);
+    if (aIsLow) return -1;
+    if (bIsLow) return 1;
+    return String(a.name).localeCompare(String(b.name));
+  });
+}
+
+function compareDailyLowRows(a: PerformanceRow, b: PerformanceRow): number {
+  const scoreDiff = dailyLowSeverity(b) - dailyLowSeverity(a);
+  if (scoreDiff !== 0) return scoreDiff;
+  const callsDiff = dailyTotalCalls(a) - dailyTotalCalls(b);
+  if (callsDiff !== 0) return callsDiff;
+  return String(a.name).localeCompare(String(b.name));
+}
+
+function dailyLowSeverity(row: PerformanceRow): number {
+  const totalCalls = dailyTotalCalls(row);
+  const morningCalls = Number(row.details?.morningCalls ?? 0);
+  const eveningCalls = Number(row.details?.eveningCalls ?? 0);
+  let score = 0;
+  if (totalCalls <= 5) score += 100 - totalCalls;
+  if (morningCalls === 0) score += 50;
+  if (eveningCalls === 0) score += 50;
+  return score;
+}
+
+function dailyTotalCalls(row: PerformanceRow): number {
+  const value = Number(row.details?.totalCalls ?? row.value ?? 0);
+  return Number.isFinite(value) ? value : 0;
 }
 
 function buildReviewRows(reviewNames: string[]): PerformanceRow[] {
@@ -7761,30 +7805,14 @@ const DAILY_PERFORMANCE_HEADERS = [
   "Region",
   "Designation",
   "Note",
-  "Cp Time",
-  "Morning Calls",
-  "Morning Hours",
-  "Morning Last Call",
-  "Evening Calls",
-  "Evening Hours",
-  "Evening First Call",
-  "Evening Last Call",
-  "Total Working Hours",
-  "Total Calls",
-  "Planned Calls",
-  "Unplanned Calls",
   "Selfies",
 ] as const;
 
 const DAILY_TEAM_PERFORMANCE_HEADERS = DAILY_PERFORMANCE_HEADERS.slice(2);
 
-const DAILY_PERFORMANCE_WIDTHS = [
-  23, 14, 18, 22, 14, 17, 30, 14, 18, 18, 21, 18, 18, 22, 21, 23, 16, 18, 20, 14,
-];
+const DAILY_PERFORMANCE_WIDTHS = [23, 14, 18, 22, 14, 17, 46, 14];
 
-const DAILY_TEAM_PERFORMANCE_WIDTHS = [
-  14.5, 21.5, 10, 12, 29, 14, 18, 18, 21, 16, 16, 22, 21, 18, 16, 18, 20, 14,
-];
+const DAILY_TEAM_PERFORMANCE_WIDTHS = [18, 22, 14, 17, 46, 14];
 
 function buildDailyTeamReports(rows: PerformanceRow[]): PerformanceTeamReport[] {
   const byTeam = new Map<string, PerformanceRow[]>();
@@ -7803,7 +7831,7 @@ function buildDailyTeamReports(rows: PerformanceRow[]): PerformanceTeamReport[] 
       topRows: teamRows.filter((row) => row.details?.performanceStatus === "Top"),
       lowRows: teamRows
         .filter((row) => row.details?.performanceStatus === "Low")
-        .sort((a, b) => Number(a.value || 0) - Number(b.value || 0)),
+        .sort(compareDailyLowRows),
       summaryRows: [],
     }));
 }
@@ -7896,6 +7924,7 @@ function dailyPerformanceSheetRow(
   const eveningHours = detailValue(details, "eveningHours");
   const totalWorkingHours = detailValue(details, "totalWorkingHours");
   const totalCalls = detailValue(details, "totalCalls") || row.value || 0;
+  const note = dailyPerformanceDetailNote(row, details, totalCalls);
   return {
     performanceStatus: forcedStatus ?? detailValue(details, "performanceStatus"),
     team: row.teamName ?? detailValue(details, "team"),
@@ -7906,13 +7935,11 @@ function dailyPerformanceSheetRow(
     name: row.name,
     region: row.region ?? detailValue(details, "region"),
     designation: row.designation ?? detailValue(details, "designation"),
-    note:
-      row.note && !String(row.note).includes("h ")
-        ? row.note
-        : `${totalCalls} calls, ${formatPerformanceHours(morningHours)} morning, ${formatPerformanceHours(eveningHours)} evening`,
+    note,
     cpTime: detailValue(details, "cpTime"),
     morningCalls: detailValue(details, "morningCalls"),
     morningHours: formatPerformanceHours(morningHours),
+    morningFirstCall: detailValue(details, "morningFirstCall"),
     morningLastCall: detailValue(details, "morningLastCall"),
     eveningCalls: detailValue(details, "eveningCalls"),
     eveningHours: formatPerformanceHours(eveningHours),
@@ -7924,6 +7951,41 @@ function dailyPerformanceSheetRow(
     unplannedCalls: detailValue(details, "unplannedCalls"),
     selfies: detailValue(details, "selfies"),
   };
+}
+
+function dailyPerformanceDetailNote(
+  row: PerformanceRow,
+  details: Record<string, string | number>,
+  totalCalls: string | number,
+): string {
+  const morningCalls = Number(detailValue(details, "morningCalls") || 0);
+  const eveningCalls = Number(detailValue(details, "eveningCalls") || 0);
+  const morningMinutes = Number(detailValue(details, "morningMinutes") || 0);
+  const eveningMinutes = Number(detailValue(details, "eveningMinutes") || 0);
+  const totalWorkingMinutes = Number(detailValue(details, "totalWorkingMinutes") || 0);
+  const plannedCalls = detailValue(details, "plannedCalls") || 0;
+  const unplannedCalls = detailValue(details, "unplannedCalls") || 0;
+  const remarks = detailValue(details, "remarks");
+
+  const morningLine = morningCalls
+    ? `Morning: ${formatPerformanceMinutes(morningMinutes)}, first ${detailValue(details, "morningFirstCall") || "N/A"}, last ${detailValue(details, "morningLastCall") || "N/A"}`
+    : "Morning: Absent";
+  const eveningLine = eveningCalls
+    ? `Evening: ${formatPerformanceMinutes(eveningMinutes)}, first ${detailValue(details, "eveningFirstCall") || "N/A"}, last ${detailValue(details, "eveningLastCall") || "N/A"}`
+    : "Evening: Absent";
+
+  if (!details.totalCalls && row.note === "Needs review") return row.note;
+
+  return [
+    `CP: ${detailValue(details, "cpTime") || "N/A"}`,
+    remarks ? `Activities: ${remarks}` : "",
+    `Total working: ${formatPerformanceMinutes(totalWorkingMinutes)}`,
+    morningLine,
+    eveningLine,
+    `Calls: ${totalCalls || 0}, planned ${plannedCalls}, unplanned ${unplannedCalls}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function detailValue(details: Record<string, string | number>, key: string): string | number {
@@ -7989,13 +8051,16 @@ function styleDailyPerformanceHeader(row: import("exceljs").Row) {
 }
 
 function styleDailyPerformanceDataRow(row: import("exceljs").Row) {
-  row.height = Math.max(row.height ?? 0, 18);
+  const rowValues = Array.isArray(row.values) ? row.values : Object.values(row.values);
+  const hasMultiline = rowValues.some((value) => String(value ?? "").includes("\n"));
+  row.height = Math.max(row.height ?? 0, hasMultiline ? 82 : 18);
   row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+    const isMultiline = String(cell.value ?? "").includes("\n");
     cell.font = { name: "Calibri", size: 10, color: { argb: "FF000000" } };
     cell.alignment = {
-      horizontal: [4, 7].includes(colNumber) ? "left" : "center",
+      horizontal: [4, 7].includes(colNumber) || isMultiline ? "left" : "center",
       vertical: "middle",
-      wrapText: colNumber === 7,
+      wrapText: colNumber === 7 || isMultiline,
     };
     cell.border = DAILY_PERFORMANCE_BORDER;
   });
