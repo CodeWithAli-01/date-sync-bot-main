@@ -189,6 +189,16 @@ interface SelfieEmployeeSummary {
   dateCounts: Map<string, number>;
 }
 
+interface SelfieData {
+  byCode: Map<string, SelfieEmployeeSummary>;
+  byName: Map<string, SelfieEmployeeSummary[]>;
+  sources: SelfieEmployeeSummary[];
+  imageRows: number;
+  emptyFiles: string[];
+  columnMissFiles: string[];
+  unreadableFiles: string[];
+}
+
 interface SelfieMatchResult {
   source?: SelfieEmployeeSummary;
   reason: "code" | "exact-name" | "similar-name" | "ambiguous-name" | "missing-source";
@@ -482,6 +492,17 @@ function processDailySheet(
     const match = findDailySummaryForRow(code, rowTeamName, summariesByTeamCode, summariesByCode);
     if (!match) {
       writeUnmatchedDailyDefaults(row, outputColumns);
+      const unmatchedSelfies = resolveSelfieCountForTemplateEmployee(
+        code,
+        name,
+        callLog.selfieData,
+      );
+      if (outputColumns.selfieCol) {
+        const selfieCount = unmatchedSelfies ?? 0;
+        const selfieCell = row.getCell(outputColumns.selfieCol);
+        selfieCell.value = formatSelfieText(selfieCount);
+        styleSelfieCell(selfieCell, selfieCount);
+      }
       performanceRows.push({
         teamName: rowTeamName || sheet.name,
         sortOrder,
@@ -507,9 +528,7 @@ function processDailySheet(
         totalWorkingHours: 0,
         totalWorkingMinutes: 0,
         totalCalls: 0,
-        selfies: outputColumns.selfieCol
-          ? parseSelfieCountFromCell(cellText(row.getCell(outputColumns.selfieCol)))
-          : 0,
+        selfies: unmatchedSelfies ?? 0,
         cpTime: "",
         remarks: "",
         plannedPercent: 0,
@@ -535,13 +554,9 @@ function processDailySheet(
     styleDailyCells(row, outputColumns);
     if (outputColumns.selfieCol) {
       const selfieCell = row.getCell(outputColumns.selfieCol);
-      if (match.selfies === null) {
-        selfieCell.value = null;
-        applyIsolatedSelfieStyle(selfieCell, undefined);
-      } else {
-        selfieCell.value = formatSelfieText(match.selfies);
-        styleSelfieCell(selfieCell, match.selfies);
-      }
+      const selfieCount = match.selfies ?? 0;
+      selfieCell.value = formatSelfieText(selfieCount);
+      styleSelfieCell(selfieCell, selfieCount);
     }
     const performanceSelfies =
       match.selfies ??
@@ -754,6 +769,7 @@ async function readCallLog(file: File): Promise<{
   selfieEmptyFiles: number;
   selfieColumnMissFiles: number;
   selfieUnreadableFiles: number;
+  selfieData?: SelfieData;
 }> {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(await file.arrayBuffer());
@@ -797,6 +813,7 @@ async function readCallLog(file: File): Promise<{
     selfieEmptyFiles: 0,
     selfieColumnMissFiles: 0,
     selfieUnreadableFiles: 0,
+    selfieData: undefined,
   };
 }
 
@@ -948,6 +965,7 @@ async function readCallLogs(files: File | File[]): Promise<{
   selfieEmptyFiles: number;
   selfieColumnMissFiles: number;
   selfieUnreadableFiles: number;
+  selfieData?: SelfieData;
 }> {
   const fileList = Array.isArray(files) ? files : [files];
   if (!fileList.length) throw new Error("Please upload at least one call log Excel file.");
@@ -1023,6 +1041,7 @@ async function readCallLogs(files: File | File[]): Promise<{
     selfieEmptyFiles: 0,
     selfieColumnMissFiles: 0,
     selfieUnreadableFiles: 0,
+    selfieData: undefined,
   };
 }
 
@@ -1045,6 +1064,7 @@ async function applySelfiesToCallLog(
   if (!fileList.length) return;
 
   const selfieData = await readSelfieFiles(fileList);
+  callLog.selfieData = selfieData;
   callLog.selfieRows = selfieData.imageRows;
   callLog.selfieEmptyFiles = selfieData.emptyFiles.length;
   callLog.selfieColumnMissFiles = selfieData.columnMissFiles.length;
@@ -1066,15 +1086,7 @@ async function applySelfiesToCallLog(
   }
 }
 
-async function readSelfieFiles(files: File[]): Promise<{
-  byCode: Map<string, SelfieEmployeeSummary>;
-  byName: Map<string, SelfieEmployeeSummary[]>;
-  sources: SelfieEmployeeSummary[];
-  imageRows: number;
-  emptyFiles: string[];
-  columnMissFiles: string[];
-  unreadableFiles: string[];
-}> {
+async function readSelfieFiles(files: File[]): Promise<SelfieData> {
   const byCode = new Map<string, SelfieEmployeeSummary>();
   const byName = new Map<string, SelfieEmployeeSummary[]>();
   const sources: SelfieEmployeeSummary[] = [];
@@ -1141,16 +1153,20 @@ async function readSelfieFiles(files: File[]): Promise<{
 
 function findSelfieSourceForSummary(
   summary: CallSummary,
-  selfieData: {
-    byCode: Map<string, SelfieEmployeeSummary>;
-    byName: Map<string, SelfieEmployeeSummary[]>;
-    sources: SelfieEmployeeSummary[];
-  },
+  selfieData: SelfieData,
 ): SelfieMatchResult {
-  const byCode = selfieData.byCode.get(summary.code);
+  return findSelfieSourceForEmployee(summary.code, summary.name, selfieData);
+}
+
+function findSelfieSourceForEmployee(
+  code: string | null,
+  name: string,
+  selfieData: SelfieData,
+): SelfieMatchResult {
+  const byCode = code ? selfieData.byCode.get(code) : undefined;
   if (byCode) return { source: byCode, reason: "code" };
 
-  const summaryNameKey = personNameKey(summary.name);
+  const summaryNameKey = personNameKey(name);
   const byName = selfieData.byName.get(summaryNameKey) ?? [];
   if (byName.length === 1) return { source: byName[0], reason: "exact-name" };
   if (byName.length > 1) return { reason: "ambiguous-name" };
@@ -1180,6 +1196,18 @@ function resolveSelfieCountForDates(
     usedFallback: false,
     dateMissed: callDates.size > 0 && sourceHasImages,
   };
+}
+
+function resolveSelfieCountForTemplateEmployee(
+  code: string,
+  name: string,
+  selfieData?: SelfieData,
+): number | null {
+  if (!selfieData) return null;
+  const match = findSelfieSourceForEmployee(code, name, selfieData);
+  if (!match.source) return null;
+  const total = [...match.source.dateCounts.values()].reduce((sum, count) => sum + count, 0);
+  return total > 0 ? total : null;
 }
 
 function getSelfieSummary(
