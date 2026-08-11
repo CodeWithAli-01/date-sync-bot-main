@@ -279,7 +279,9 @@ export async function processBulkDailyReports(
   await teamsWorkbook.xlsx.load(await teamsWorkbookFile.arrayBuffer());
   removeRemarksColumnsFromWorkbook(teamsWorkbook);
   const allTeamSources = findDailyTeamSources(teamsWorkbook);
-  const teamSources = filterTeamSourcesByCallLogTeams(allTeamSources, callLog.teamNames);
+  const teamSources = callLog.selfieFileCount
+    ? allTeamSources
+    : filterTeamSourcesByCallLogTeams(allTeamSources, callLog.teamNames);
 
   if (!teamSources.length) {
     throw new Error(
@@ -470,6 +472,7 @@ function processDailySheet(
     summariesByCode.set(summary.code, summaries);
   }
   const unmatched = new Set(callLog.summaries.map((item) => unmatchedSummaryKey(item)));
+  const reportDates = callLogReportDates(callLog);
   const preview: { name: string; total: number }[] = [];
   const performanceRows: DailyPerformanceRow[] = [];
   let matchedEmployees = 0;
@@ -496,6 +499,7 @@ function processDailySheet(
         code,
         name,
         callLog.selfieData,
+        reportDates,
       );
       if (outputColumns.selfieCol) {
         const selfieCount = unmatchedSelfies ?? 0;
@@ -1202,12 +1206,22 @@ function resolveSelfieCountForTemplateEmployee(
   code: string,
   name: string,
   selfieData?: SelfieData,
+  reportDates: Set<string> = new Set(),
 ): number | null {
   if (!selfieData) return null;
   const match = findSelfieSourceForEmployee(code, name, selfieData);
   if (!match.source) return null;
-  const total = [...match.source.dateCounts.values()].reduce((sum, count) => sum + count, 0);
-  return total > 0 ? total : null;
+  if (!reportDates.size) return null;
+  const resolved = resolveSelfieCountForDates(reportDates, match.source.dateCounts);
+  return resolved.count > 0 ? resolved.count : null;
+}
+
+function callLogReportDates(callLog: Awaited<ReturnType<typeof readCallLogs>>): Set<string> {
+  const dates = new Set<string>();
+  for (const summary of callLog.summaries) {
+    summary.dates.forEach((date) => dates.add(date));
+  }
+  return dates;
 }
 
 function getSelfieSummary(
