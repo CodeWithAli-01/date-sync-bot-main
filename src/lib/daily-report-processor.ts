@@ -30,6 +30,7 @@ export interface DailyReportResult {
 
 export interface DailyPerformanceRow {
   teamName: string;
+  sortOrder: number;
   employeeCode: string;
   name: string;
   region: string;
@@ -297,7 +298,11 @@ export async function processBulkDailyReports(
           : undefined;
       const result = processDailySheet(callLog, sheet, shouldProcessRow);
       performanceRows.push(
-        ...result.performanceRows.map((row) => ({ ...row, teamName: source.teamName })),
+        ...result.performanceRows.map((row) => ({
+          ...row,
+          teamName: source.teamName,
+          sortOrder: index * 100000 + row.sortOrder,
+        })),
       );
       summary.push({
         teamName: source.teamName,
@@ -459,6 +464,7 @@ function processDailySheet(
   const performanceRows: DailyPerformanceRow[] = [];
   let matchedEmployees = 0;
   let totalEmployees = 0;
+  let sortOrder = 0;
 
   for (let rowNumber = columns.headerRow + 1; rowNumber <= sheet.rowCount; rowNumber++) {
     const row = sheet.getRow(rowNumber);
@@ -468,6 +474,7 @@ function processDailySheet(
     const name = cellText(row.getCell(outputColumns.nameCol));
     if (!code) continue;
     totalEmployees++;
+    sortOrder++;
 
     const rowTeamName = outputColumns.teamCol
       ? cellText(row.getCell(outputColumns.teamCol))
@@ -475,6 +482,40 @@ function processDailySheet(
     const match = findDailySummaryForRow(code, rowTeamName, summariesByTeamCode, summariesByCode);
     if (!match) {
       writeUnmatchedDailyDefaults(row, outputColumns);
+      performanceRows.push({
+        teamName: rowTeamName || sheet.name,
+        sortOrder,
+        employeeCode: code,
+        name,
+        region: outputColumns.regionCol ? cellText(row.getCell(outputColumns.regionCol)) : "",
+        city: outputColumns.cityCol ? cellText(row.getCell(outputColumns.cityCol)) : "",
+        designation: outputColumns.designationCol
+          ? cellText(row.getCell(outputColumns.designationCol))
+          : "",
+        planned: 0,
+        unplanned: 0,
+        morningCalls: 0,
+        morningHours: 0,
+        morningMinutes: 0,
+        morningFirstCall: "",
+        morningLastCall: "",
+        eveningCalls: 0,
+        eveningHours: 0,
+        eveningMinutes: 0,
+        eveningFirstCall: "",
+        eveningLastCall: "",
+        totalWorkingHours: 0,
+        totalWorkingMinutes: 0,
+        totalCalls: 0,
+        selfies: outputColumns.selfieCol
+          ? parseSelfieCountFromCell(cellText(row.getCell(outputColumns.selfieCol)))
+          : 0,
+        cpTime: "",
+        remarks: "",
+        plannedPercent: 0,
+        topQualified: false,
+        lowQualified: true,
+      });
       continue;
     }
 
@@ -502,7 +543,11 @@ function processDailySheet(
         styleSelfieCell(selfieCell, match.selfies);
       }
     }
-    const performanceSelfies = match.selfies ?? 0;
+    const performanceSelfies =
+      match.selfies ??
+      (outputColumns.selfieCol
+        ? parseSelfieCountFromCell(cellText(row.getCell(outputColumns.selfieCol)))
+        : 0);
     const morningMinutes = dailyShiftMinutes(
       match.cpMinutes,
       match.morningFirstMinutes,
@@ -522,6 +567,7 @@ function processDailySheet(
     if (match.total > 0) preview.push({ name: name || match.name, total: match.total });
     performanceRows.push({
       teamName: rowTeamName || match.teamName || sheet.name,
+      sortOrder,
       employeeCode: code,
       name: name || match.name,
       region: outputColumns.regionCol ? cellText(row.getCell(outputColumns.regionCol)) : "",

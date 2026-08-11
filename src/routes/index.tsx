@@ -163,6 +163,7 @@ interface PerformanceReport {
 
 interface PerformanceRow {
   teamName?: string;
+  sortOrder?: number;
   employeeCode?: string;
   name: string;
   region?: string;
@@ -5928,7 +5929,7 @@ function buildBulkDailyPerformanceReport(report: BulkDailyReportResult): Perform
     const teamSummary = report.summary.find((item) => item.teamName === teamName);
     return {
       teamName,
-      allRows: teamRows,
+      allRows: sortDailyAllRows(teamRows),
       topRows: teamRows
         .filter((row) => row.topQualified)
         .sort((a, b) => Number(b.value) - Number(a.value)),
@@ -5956,14 +5957,11 @@ function buildBulkDailyPerformanceReport(report: BulkDailyReportResult): Perform
       "Top: 12 total calls with 4+ morning hours and 3+ evening hours. Low: 5 or fewer total calls, or missing morning/evening shift.",
     fileName: report.fileName.replace(/\.xlsx$/i, "") + " - Performance.xlsx",
     sourceBlob: report.blob,
-    allRows: rows,
+    allRows: sortDailyAllRows(rows),
     topRows: rows
       .filter((row) => row.topQualified)
       .sort((a, b) => Number(b.value) - Number(a.value)),
-    lowRows: rows
-      .filter((row) => row.lowQualified)
-      .sort((a, b) => Number(a.value) - Number(b.value))
-      .concat(failedTeamRows),
+    lowRows: [...sortDailyLowRows(rows.filter((row) => row.lowQualified)), ...failedTeamRows],
     summaryRows: [
       {
         totalTeams: report.totalTeams,
@@ -6034,6 +6032,7 @@ function dailyPerformanceRows(
 ): Array<PerformanceRow & { topQualified: boolean; lowQualified: boolean }> {
   return rows.map((row) => ({
     teamName: row.teamName,
+    sortOrder: row.sortOrder,
     employeeCode: row.employeeCode,
     name: row.name,
     region: row.region,
@@ -6043,6 +6042,7 @@ function dailyPerformanceRows(
     note: `${row.totalCalls} calls, ${formatPerformanceHours(row.morningHours)} morning, ${formatPerformanceHours(row.eveningHours)} evening`,
     details: {
       performanceStatus: row.topQualified ? "Top" : row.lowQualified ? "Low" : "Normal",
+      sortOrder: row.sortOrder,
       employeeCode: row.employeeCode,
       name: row.name,
       region: row.region,
@@ -6079,14 +6079,14 @@ function sortDailyLowRows(rows: PerformanceRow[]): PerformanceRow[] {
 }
 
 function sortDailyAllRows(rows: PerformanceRow[]): PerformanceRow[] {
-  return [...rows].sort((a, b) => {
-    const aIsLow = a.details?.performanceStatus === "Low";
-    const bIsLow = b.details?.performanceStatus === "Low";
-    if (aIsLow && bIsLow) return compareDailyLowRows(a, b);
-    if (aIsLow) return -1;
-    if (bIsLow) return 1;
-    return String(a.name).localeCompare(String(b.name));
-  });
+  return [...rows].sort(compareDailySampleOrder);
+}
+
+function compareDailySampleOrder(a: PerformanceRow, b: PerformanceRow): number {
+  const aOrder = Number(a.sortOrder ?? a.details?.sortOrder ?? Number.MAX_SAFE_INTEGER);
+  const bOrder = Number(b.sortOrder ?? b.details?.sortOrder ?? Number.MAX_SAFE_INTEGER);
+  if (aOrder !== bOrder) return aOrder - bOrder;
+  return String(a.name).localeCompare(String(b.name));
 }
 
 function compareDailyLowRows(a: PerformanceRow, b: PerformanceRow): number {
@@ -7651,7 +7651,7 @@ async function buildDailyPerformanceWorkbook(
     addDailyTeamPerformanceWorksheet(
       wb,
       teamReport.teamName,
-      dailyRowsToTeamPerformanceSheetRows(teamReport.lowRows),
+      dailyRowsToTeamPerformanceSheetRows(teamReport.allRows),
     );
   }
 
@@ -7827,7 +7827,7 @@ function buildDailyTeamReports(rows: PerformanceRow[]): PerformanceTeamReport[] 
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([teamName, teamRows]) => ({
       teamName,
-      allRows: teamRows,
+      allRows: sortDailyAllRows(teamRows),
       topRows: teamRows.filter((row) => row.details?.performanceStatus === "Top"),
       lowRows: teamRows
         .filter((row) => row.details?.performanceStatus === "Low")
