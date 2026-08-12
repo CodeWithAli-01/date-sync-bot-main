@@ -497,15 +497,18 @@ function processDailySheet(
       writeUnmatchedDailyDefaults(row, outputColumns);
       const unmatchedSelfies = resolveSelfieCountForTemplateEmployee(
         code,
-        name,
         callLog.selfieData,
         reportDates,
       );
       if (outputColumns.selfieCol) {
-        const selfieCount = unmatchedSelfies ?? 0;
         const selfieCell = row.getCell(outputColumns.selfieCol);
-        selfieCell.value = formatSelfieText(selfieCount);
-        styleSelfieCell(selfieCell, selfieCount);
+        if (unmatchedSelfies === null) {
+          selfieCell.value = null;
+          applyIsolatedSelfieStyle(selfieCell, undefined);
+        } else {
+          selfieCell.value = formatSelfieText(unmatchedSelfies);
+          styleSelfieCell(selfieCell, unmatchedSelfies);
+        }
       }
       performanceRows.push({
         teamName: rowTeamName || sheet.name,
@@ -1101,7 +1104,8 @@ async function readSelfieFiles(files: File[]): Promise<SelfieData> {
 
   for (const file of files) {
     const employee = parseSelfieEmployeeFromFileName(file.name);
-    if (!employee.code && !employee.nameKey) continue;
+    if (!employee.code) continue;
+    const summary = getSelfieSummary(byCode, byName, sources, employee, file.name);
 
     const workbook = new ExcelJS.Workbook();
     try {
@@ -1136,7 +1140,6 @@ async function readSelfieFiles(files: File[]): Promise<SelfieData> {
         if (!dateKey) continue;
 
         imageRows++;
-        const summary = getSelfieSummary(byCode, byName, sources, employee, file.name);
         summary.dateCounts.set(dateKey, (summary.dateCounts.get(dateKey) ?? 0) + 1);
       }
     }
@@ -1159,29 +1162,15 @@ function findSelfieSourceForSummary(
   summary: CallSummary,
   selfieData: SelfieData,
 ): SelfieMatchResult {
-  return findSelfieSourceForEmployee(summary.code, summary.name, selfieData);
+  return findSelfieSourceForEmployeeCode(summary.code, selfieData);
 }
 
-function findSelfieSourceForEmployee(
+function findSelfieSourceForEmployeeCode(
   code: string | null,
-  name: string,
   selfieData: SelfieData,
 ): SelfieMatchResult {
   const byCode = code ? selfieData.byCode.get(code) : undefined;
-  if (byCode) return { source: byCode, reason: "code" };
-
-  const summaryNameKey = personNameKey(name);
-  const byName = selfieData.byName.get(summaryNameKey) ?? [];
-  if (byName.length === 1) return { source: byName[0], reason: "exact-name" };
-  if (byName.length > 1) return { reason: "ambiguous-name" };
-
-  const candidates = uniqueSelfieSources(
-    selfieData.sources.filter((source) => selfieNamesMatch(summaryNameKey, source.nameKey)),
-  );
-  if (candidates.length === 1) return { source: candidates[0], reason: "similar-name" };
-  if (candidates.length > 1) return { reason: "ambiguous-name" };
-
-  return { reason: "missing-source" };
+  return byCode ? { source: byCode, reason: "code" } : { reason: "missing-source" };
 }
 
 function resolveSelfieCountForDates(
@@ -1204,16 +1193,15 @@ function resolveSelfieCountForDates(
 
 function resolveSelfieCountForTemplateEmployee(
   code: string,
-  name: string,
   selfieData?: SelfieData,
   reportDates: Set<string> = new Set(),
 ): number | null {
   if (!selfieData) return null;
-  const match = findSelfieSourceForEmployee(code, name, selfieData);
+  const match = findSelfieSourceForEmployeeCode(code, selfieData);
   if (!match.source) return null;
   if (!reportDates.size) return null;
   const resolved = resolveSelfieCountForDates(reportDates, match.source.dateCounts);
-  return resolved.count > 0 ? resolved.count : null;
+  return resolved.count;
 }
 
 function callLogReportDates(callLog: Awaited<ReturnType<typeof readCallLogs>>): Set<string> {
