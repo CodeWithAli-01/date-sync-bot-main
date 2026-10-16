@@ -327,7 +327,7 @@ async function readMonthlyCallLog(input: File | File[]): Promise<{
 
         const name = cellText(row.getCell(columns.nameCol)).trim();
         const eventType = normalize(cellText(row.getCell(columns.eventTypeCol)));
-        const shift = columns.shiftCol ? normalize(cellText(row.getCell(columns.shiftCol))) : "";
+        const shift = columns.shiftCol ? normalizeShift(cellText(row.getCell(columns.shiftCol))) : "";
         const dateKey = normalizeDateKey(
           row.getCell(columns.dateCol).value,
           cellText(row.getCell(columns.dateCol)),
@@ -359,7 +359,19 @@ async function readMonthlyCallLog(input: File | File[]): Promise<{
         }
         const day = dateKey ? ensureMonthlyDayDetail(summary, dateKey) : null;
 
-        if (meetingType === "contact point") {
+        const isContactPoint = matchesAny(meetingType, ["contact point", "contactpoint", "cp"]);
+        const isFaceToFaceCall = matchesAny(meetingType, [
+          "face to face call",
+          "face to face",
+          "face to face calls",
+          "f2f",
+          "f2f call",
+          "face toface",
+        ]);
+        const isPlannedCall = matchesAny(eventType, ["planned", "planned call", "plannedcall"]);
+        const isUnplannedCall = matchesAny(eventType, ["unplanned", "unplanned call", "unplannedcall"]);
+
+        if (isContactPoint) {
           contactPointRows++;
           const cpTime = timeToMinutes(
             row.getCell(columns.startTimeCol).value,
@@ -377,10 +389,9 @@ async function readMonthlyCallLog(input: File | File[]): Promise<{
           row.getCell(columns.startTimeCol).value,
           cellText(row.getCell(columns.startTimeCol)),
         );
-        const isPlannedCall = eventType === "planned";
-        const isUnplannedCall = eventType === "unplanned";
-        if (meetingType === "face to face call") faceToFaceRows++;
-        if (meetingType !== "face to face call" && day) {
+
+        if (isFaceToFaceCall) faceToFaceRows++;
+        if (!isFaceToFaceCall && day) {
           day.activities.push(monthlyActivityText(meetingTypeText, callTime, shift || "No shift"));
         }
         if (isPlannedCall) {
@@ -761,7 +772,7 @@ function shiftMinutes(
   lastCallMinutes: number | null,
 ): number {
   if (lastCallMinutes === null) return 0;
-  const start = preferredStartMinutes ?? firstCallMinutes;
+  const start = firstCallMinutes ?? preferredStartMinutes;
   if (start === null || lastCallMinutes <= start) return 0;
   return lastCallMinutes - start;
 }
@@ -825,9 +836,39 @@ function minutesToTime(totalMinutes: number): string {
 
 function normalize(value: string): string {
   return String(value ?? "")
+    .replace(/[_\-]+/g, " ")
     .replace(/\s+/g, " ")
+    .replace(/[()]/g, " ")
     .trim()
     .toLowerCase();
+}
+
+function matchesAny(value: string, labels: string[]): boolean {
+  const normalized = normalize(value);
+  const valueWords = normalized.split(/\s+/).filter(Boolean);
+
+  return labels.some((label) => {
+    const normalizedLabel = normalize(label);
+    if (!normalizedLabel) return false;
+    if (normalized === normalizedLabel) return true;
+
+    const labelWords = normalizedLabel.split(/\s+/).filter(Boolean);
+    if (labelWords.length === 1) return valueWords.includes(normalizedLabel);
+
+    for (let index = 0; index <= valueWords.length - labelWords.length; index++) {
+      const phrase = valueWords.slice(index, index + labelWords.length).join(" ");
+      if (phrase === normalizedLabel) return true;
+    }
+
+    return false;
+  });
+}
+
+function normalizeShift(value: string): string {
+  const normalized = normalize(value);
+  if (["morning", "am", "m"].includes(normalized)) return "morning";
+  if (["evening", "pm", "e", "eve", "even"].includes(normalized)) return "evening";
+  return normalized;
 }
 
 function cellText(cell: ExcelJS.Cell): string {
