@@ -248,14 +248,15 @@ function fillMonthlyPlannedSheet(
     row.getCell(columns.totalCallsCol).value = match.totalCalls;
     row.getCell(columns.totalCallsAvgCol).value = average(match.totalCalls, days);
     row.getCell(columns.cpAvgTimeCol).value = averageTime(match.cpTimes);
+    const workingDayDetails = dailyDetails.filter((detail) => detail.totalCalls > 0);
     row.getCell(columns.morningWorkingAvgCol).value = averageWorkingTime(
-      dailyDetails.map((detail) => detail.morningMinutes),
+      workingDayDetails.map((detail) => detail.morningMinutes),
     );
     row.getCell(columns.eveningWorkingAvgCol).value = averageWorkingTime(
-      dailyDetails.map((detail) => detail.eveningMinutes),
+      workingDayDetails.map((detail) => detail.eveningMinutes),
     );
     row.getCell(columns.totalWorkingAvgCol).value = averageWorkingTime(
-      dailyDetails.map((detail) => detail.totalWorkingMinutes),
+      workingDayDetails.map((detail) => detail.totalWorkingMinutes),
     );
     styleMonthlyCells(row, columns);
 
@@ -353,12 +354,6 @@ async function readMonthlyCallLog(input: File | File[]): Promise<{
         }
 
         sourceRows++;
-        if (dateKey) {
-          summary.days.add(dateKey);
-          dates.add(dateKey);
-        }
-        const day = dateKey ? ensureMonthlyDayDetail(summary, dateKey) : null;
-
         const isContactPoint = matchesAny(meetingType, ["contact point", "contactpoint", "cp"]);
         const isFaceToFaceCall = matchesAny(meetingType, [
           "face to face call",
@@ -370,6 +365,12 @@ async function readMonthlyCallLog(input: File | File[]): Promise<{
         ]);
         const isPlannedCall = matchesAny(eventType, ["planned", "planned call", "plannedcall"]);
         const isUnplannedCall = matchesAny(eventType, ["unplanned", "unplanned call", "unplannedcall"]);
+
+        if (dateKey && !isContactPoint && (isPlannedCall || isUnplannedCall || isFaceToFaceCall)) {
+          summary.days.add(dateKey);
+          dates.add(dateKey);
+        }
+        const day = dateKey ? ensureMonthlyDayDetail(summary, dateKey) : null;
 
         if (isContactPoint) {
           contactPointRows++;

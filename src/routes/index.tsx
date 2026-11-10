@@ -70,6 +70,10 @@ import {
   type MonthlyPlannedResult,
 } from "@/lib/monthly-planned-processor";
 import {
+  processCustomSummaryReport,
+  type CustomSummaryResult,
+} from "@/lib/custom-summary-processor";
+import {
   BUILT_IN_DISTRIBUTOR_PROFILES,
   DISTRIBUTOR_SALES_COLUMNS,
   DISTRIBUTOR_NUMERIC_COLUMNS,
@@ -116,6 +120,7 @@ type ActiveModule =
   | "daily-report"
   | "doctor-coverage"
   | "monthly-planned"
+  | "custom-report"
   | "distributor-sales"
   | "history"
   | "profile"
@@ -342,6 +347,13 @@ function HomePage() {
   );
   const [monthlyPlannedPreview, setMonthlyPlannedPreview] = useState<SheetPreview | null>(null);
   const [monthlyPlannedPreviewLoading, setMonthlyPlannedPreviewLoading] = useState(false);
+  const [customSampleFile, setCustomSampleFile] = useState<File | null>(null);
+  const [customCallReportFile, setCustomCallReportFile] = useState<File | null>(null);
+  const [customWhatsappFiles, setCustomWhatsappFiles] = useState<File[]>([]);
+  const [customReportLoading, setCustomReportLoading] = useState(false);
+  const [customSummaryReport, setCustomSummaryReport] = useState<CustomSummaryResult | null>(null);
+  const [customReportPreview, setCustomReportPreview] = useState<SheetPreview | null>(null);
+  const [customReportPreviewLoading, setCustomReportPreviewLoading] = useState(false);
   const [distributorFiles, setDistributorFiles] = useState<File[]>([]);
   const [distributorProcessing, setDistributorProcessing] = useState(false);
   const [distributorResult, setDistributorResult] = useState<DistributorSalesResult | null>(null);
@@ -394,6 +406,7 @@ function HomePage() {
   const monthlyPlannedCallLogInputRef = useRef<HTMLInputElement>(null);
   const monthlyPlannedTemplateInputRef = useRef<HTMLInputElement>(null);
   const monthlyPlannedPreviewRef = useRef<HTMLDivElement>(null);
+  const customReportPreviewRef = useRef<HTMLDivElement>(null);
   const distributorInputRef = useRef<HTMLInputElement>(null);
 
   const savedDistributorProfiles = useMemo(
@@ -1243,6 +1256,35 @@ function HomePage() {
     const a = document.createElement("a");
     a.href = url;
     a.download = coverageReport.fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const openCustomSummaryPreview = async () => {
+    if (!customSummaryReport) return;
+    setCustomReportPreviewLoading(true);
+    try {
+      const preview = await buildSheetPreview(customSummaryReport.blob, customSummaryReport.sheetName);
+      setCustomReportPreview(preview);
+      requestAnimationFrame(() => {
+        customReportPreviewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    } catch (error) {
+      console.error("MREP preview failed", error);
+      toast.error("Unable to open the MREP monthly report preview.");
+    } finally {
+      setCustomReportPreviewLoading(false);
+    }
+  };
+
+  const downloadCustomSummaryReport = () => {
+    if (!customSummaryReport) return;
+    const url = URL.createObjectURL(customSummaryReport.blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = customSummaryReport.fileName;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -3010,6 +3052,316 @@ function HomePage() {
     );
   }
 
+  if (activeModule === "custom-report") {
+    const handleCustomSummaryGenerate = async () => {
+      if (!customSampleFile || !customCallReportFile) {
+        toast.error("Please upload the employee sample file and the employee-wise call report file.");
+        return;
+      }
+
+      try {
+        setCustomReportLoading(true);
+        const result = await processCustomSummaryReport({
+          sampleFile: customSampleFile,
+          callReportFile: customCallReportFile,
+          whatsappFiles: customWhatsappFiles,
+        });
+        setCustomSummaryReport(result);
+        toast.success(`MREP monthly report generated for ${result.matchedEmployees} matched employees.`);
+      } catch (error) {
+        console.error("MREP report failed", error);
+        toast.error(error instanceof Error ? error.message : "Unable to generate the MREP monthly report.");
+      } finally {
+        setCustomReportLoading(false);
+      }
+    };
+
+    return (
+      <AppShell
+        activeModule={activeModule}
+        dashboardLine={dashboardLine}
+        user={authUser}
+        profilePhoto={profilePhoto}
+        onNavigate={setActiveModule}
+        onOpenHistory={openHistory}
+      >
+        <ModulePageHeader
+          icon={<PieChart className="h-5 w-5" />}
+          label="Report tool"
+          title="MREP Monthly Report"
+          description="Match each employee from the sample file to the employee-wise report and WhatsApp selfie exports, then generate the KPI Excel output."
+        />
+
+        <main className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_260px]">
+          <div className="space-y-6">
+            <div className="grid gap-4 lg:grid-cols-2">
+              <UploadCard
+                step={1}
+                title="Sample Employee File"
+                subtitle={customSampleFile ? "Sample selected" : "Upload the employee template file"}
+                icon={<FileText className="h-5 w-5" />}
+                accept=".xlsx,.xls,.xlsm"
+                ready={Boolean(customSampleFile)}
+                onClick={() => document.getElementById("mrep-sample-input")?.click()}
+              >
+                <input
+                  id="mrep-sample-input"
+                  type="file"
+                  accept=".xlsx,.xls,.xlsm"
+                  className="hidden"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (!file) return;
+                    setCustomSampleFile(file);
+                    setCustomSummaryReport(null);
+                    event.target.value = "";
+                  }}
+                />
+                {customSampleFile ? (
+                  <FilePill
+                    name={customSampleFile.name}
+                    onRemove={() => {
+                      setCustomSampleFile(null);
+                      setCustomSummaryReport(null);
+                    }}
+                    color="primary"
+                  />
+                ) : (
+                  <EmptyHint icon={<FileText className="h-5 w-5" />} label="Choose sample file" />
+                )}
+              </UploadCard>
+
+              <UploadCard
+                step={2}
+                title="Employee-wise Call Report"
+                subtitle={
+                  customCallReportFile ? "Employee call report selected" : "Upload the employee call report"
+                }
+                icon={<FileSpreadsheet className="h-5 w-5" />}
+                accept=".xlsx,.xls,.xlsm"
+                ready={Boolean(customCallReportFile)}
+                onClick={() => document.getElementById("mrep-report-input")?.click()}
+              >
+                <input
+                  id="mrep-report-input"
+                  type="file"
+                  accept=".xlsx,.xls,.xlsm"
+                  className="hidden"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (!file) return;
+                    setCustomCallReportFile(file);
+                    setCustomSummaryReport(null);
+                    event.target.value = "";
+                  }}
+                />
+                {customCallReportFile ? (
+                  <FilePill
+                    name={customCallReportFile.name}
+                    onRemove={() => {
+                      setCustomCallReportFile(null);
+                      setCustomSummaryReport(null);
+                    }}
+                    color="primary"
+                  />
+                ) : (
+                  <EmptyHint
+                    icon={<FileSpreadsheet className="h-5 w-5" />}
+                    label="Choose call report file"
+                  />
+                )}
+              </UploadCard>
+            </div>
+
+            <UploadCard
+              step={3}
+              title="WhatsApp Selfie Export Files"
+              subtitle={
+                customWhatsappFiles.length
+                  ? `${customWhatsappFiles.length} file(s) selected`
+                  : "Upload employee WhatsApp export .xlsx files"
+              }
+              icon={<FileSpreadsheet className="h-5 w-5" />}
+              accept=".xlsx,.xls,.xlsm"
+              ready={customWhatsappFiles.length > 0}
+              onClick={() => document.getElementById("mrep-whatsapp-input")?.click()}
+            >
+              <input
+                id="mrep-whatsapp-input"
+                type="file"
+                accept=".xlsx,.xls,.xlsm"
+                multiple
+                className="hidden"
+                onChange={(event) => {
+                  const files = Array.from(event.target.files ?? []);
+                  if (!files.length) return;
+                  setCustomWhatsappFiles(files);
+                  setCustomSummaryReport(null);
+                  event.target.value = "";
+                }}
+              />
+              {customWhatsappFiles.length ? (
+                <MultiFileList
+                  files={customWhatsappFiles}
+                  onClear={() => {
+                    setCustomWhatsappFiles([]);
+                    setCustomSummaryReport(null);
+                  }}
+                  onRemove={(file) => {
+                    setCustomWhatsappFiles((files) => files.filter((item) => !sameFile(item, file)));
+                    setCustomSummaryReport(null);
+                  }}
+                />
+              ) : (
+                <EmptyHint
+                  icon={<FileSpreadsheet className="h-5 w-5" />}
+                  label="Choose WhatsApp export files"
+                />
+              )}
+            </UploadCard>
+
+            <Card className="border-border bg-card p-6 shadow-[var(--shadow-soft)]">
+              <div className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
+                <div>
+                  <div className="text-xs font-bold uppercase text-primary">Step 4</div>
+                  <h2 className="mt-1 text-lg font-semibold text-foreground">
+                    Generate MREP Monthly KPI report
+                  </h2>
+                  <p className="text-sm text-muted-foreground">
+                    Matching is done by employee code first, then employee name. WhatsApp export files are counted by selfie/media cells and the average selfies per day is calculated on a 26-day basis.
+                  </p>
+                </div>
+                <Button
+                  size="lg"
+                  onClick={handleCustomSummaryGenerate}
+                  disabled={!customSampleFile || !customCallReportFile || customReportLoading}
+                  className="w-full min-w-44 sm:w-auto"
+                >
+                  {customReportLoading ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Processing...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="mr-2 h-4 w-4" />
+                      Generate MREP Report
+                    </>
+                  )}
+                </Button>
+              </div>
+            </Card>
+
+            {customSummaryReport && (
+              <Card className="border-border bg-card p-6 shadow-[var(--shadow-soft)]">
+                <div className="flex items-start gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-success/15 text-success">
+                    <CheckCircle2 className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-semibold text-foreground">MREP KPI report ready</h3>
+                    <p className="text-sm text-muted-foreground">
+                      {customSummaryReport.matchedEmployees} employee(s) matched from the sample file.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-6 flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
+                  <div className="grid gap-4 md:grid-cols-3">
+                    <Stat label="Sample rows" value={customSummaryReport.totalEmployees} />
+                    <Stat label="Matched" value={customSummaryReport.matchedEmployees} />
+                    <Stat label="Selfie files" value={customWhatsappFiles.length} />
+                  </div>
+
+                  <div className="grid w-full gap-2 sm:w-auto sm:grid-cols-2">
+                    <Button
+                      onClick={openCustomSummaryPreview}
+                      variant="outline"
+                      disabled={customReportPreviewLoading}
+                    >
+                      {customReportPreviewLoading ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <Eye className="mr-2 h-4 w-4" />
+                      )}
+                      Preview
+                    </Button>
+                    <Button onClick={downloadCustomSummaryReport}>
+                      <Download className="mr-2 h-4 w-4" />
+                      Download
+                    </Button>
+                  </div>
+                </div>
+
+                {customSummaryReport.preview.length > 0 && (
+                  <div className="mt-6">
+                    <div className="mb-2 text-sm font-semibold text-foreground">Top reported calls</div>
+                    <div className="space-y-1.5">
+                      {customSummaryReport.preview.map((item, index) => (
+                        <div
+                          key={`${item.name}-${index}`}
+                          className="flex items-center justify-between rounded-md border border-border bg-muted/40 px-3 py-2 text-sm"
+                        >
+                          <span>{item.name}</span>
+                          <span className="font-semibold text-foreground">{item.total}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {(customReportPreviewLoading || customReportPreview) && (
+                  <Card
+                    ref={customReportPreviewRef}
+                    className="mt-6 border-border bg-card p-5 shadow-[var(--shadow-soft)]"
+                  >
+                    <div className="mb-3 text-sm font-semibold text-foreground">
+                      {customReportPreview?.name ?? "Opening MREP monthly report preview"}
+                    </div>
+                    <div className="max-h-[70vh] overflow-auto rounded-md border border-border bg-background">
+                      {customReportPreviewLoading && !customReportPreview ? (
+                        <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Opening preview...
+                        </div>
+                      ) : (
+                        <PreviewTable preview={customReportPreview} readOnly />
+                      )}
+                    </div>
+                  </Card>
+                )}
+
+                {customSummaryReport.warnings.length > 0 && (
+                  <div className="mt-6 rounded-md border border-warning/40 bg-warning/10 p-4 text-sm text-warning-foreground">
+                    {customSummaryReport.warnings[0]}
+                  </div>
+                )}
+              </Card>
+            )}
+          </div>
+
+          <aside className="space-y-4">
+            <Card className="border-border bg-card p-5 shadow-[var(--shadow-soft)]">
+              <div className="mb-4 flex items-center justify-between">
+                <div>
+                  <div className="text-xs font-bold uppercase text-primary">Run status</div>
+                  <h2 className="mt-1 text-base font-semibold text-foreground">MREP workflow</h2>
+                </div>
+                <ShieldCheck className="h-5 w-5 text-primary" />
+              </div>
+              <div className="space-y-3">
+                <ChecklistItem done={Boolean(customSampleFile)} label="Sample employee file attached" />
+                <ChecklistItem done={Boolean(customCallReportFile)} label="Call report attached" />
+                <ChecklistItem done={customWhatsappFiles.length > 0} label="WhatsApp export files attached" />
+                <ChecklistItem done={Boolean(customSummaryReport)} label="KPI report generated" />
+              </div>
+            </Card>
+          </aside>
+        </main>
+      </AppShell>
+    );
+  }
+
   if (activeModule === "distributor-sales") {
     return (
       <AppShell
@@ -4610,6 +4962,12 @@ function AppShell({
       label: "Planned Summary",
       icon: <CalendarDays className="h-4 w-4" />,
       description: "Averages",
+    },
+    {
+      id: "custom-report" as const,
+      label: "MREP Monthly Report",
+      icon: <PieChart className="h-4 w-4" />,
+      description: "Workbook stats",
     },
     {
       id: "distributor-sales" as const,

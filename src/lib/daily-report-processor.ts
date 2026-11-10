@@ -1085,10 +1085,11 @@ async function applySelfiesToCallLog(
       continue;
     }
 
+    const usedFallback = match.reason !== "code";
     callLog.selfieMatchedEmployees++;
     const resolved = resolveSelfieCountForDates(summary.dates, match.source.dateCounts);
     summary.selfies = resolved.count;
-    if (resolved.usedFallback) callLog.selfieFallbackMatches++;
+    if (usedFallback || resolved.usedFallback) callLog.selfieFallbackMatches++;
     if (resolved.dateMissed) callLog.selfieDateMisses++;
   }
 }
@@ -1104,7 +1105,6 @@ async function readSelfieFiles(files: File[]): Promise<SelfieData> {
 
   for (const file of files) {
     const employee = parseSelfieEmployeeFromFileName(file.name);
-    if (!employee.code) continue;
     const summary = getSelfieSummary(byCode, byName, sources, employee, file.name);
 
     const workbook = new ExcelJS.Workbook();
@@ -1162,7 +1162,12 @@ function findSelfieSourceForSummary(
   summary: CallSummary,
   selfieData: SelfieData,
 ): SelfieMatchResult {
-  return findSelfieSourceForEmployeeCode(summary.code, selfieData);
+  const byCode = findSelfieSourceForEmployeeCode(summary.code, selfieData);
+  if (byCode.source) return byCode;
+
+  const byName = findSelfieSourceForEmployeeName(summary.name, selfieData);
+  if (byName.source) return byName;
+  return byCode;
 }
 
 function findSelfieSourceForEmployeeCode(
@@ -1171,6 +1176,39 @@ function findSelfieSourceForEmployeeCode(
 ): SelfieMatchResult {
   const byCode = code ? selfieData.byCode.get(code) : undefined;
   return byCode ? { source: byCode, reason: "code" } : { reason: "missing-source" };
+}
+
+function findSelfieSourceForEmployeeName(
+  name: string,
+  selfieData: SelfieData,
+): SelfieMatchResult {
+  const normalizedName = personNameKey(name);
+  if (!normalizedName) return { reason: "missing-source" };
+
+  const candidates = selfieData.byName.get(normalizedName) ?? [];
+  if (!candidates.length) {
+    const similarMatches = [...selfieData.sources].filter((source) =>
+      selfieNamesMatch(source.nameKey, normalizedName),
+    );
+    if (similarMatches.length === 1) return { source: similarMatches[0], reason: "similar-name" };
+    if (similarMatches.length > 1) return { reason: "ambiguous-name" };
+    return { reason: "missing-source" };
+  }
+
+  const exactMatches = candidates.filter(
+    (source) =>
+      personNameKey(source.name) === normalizedName ||
+      normalize(source.name) === normalize(name) ||
+      selfieNamesMatch(source.name, name),
+  );
+  if (exactMatches.length === 1) return { source: exactMatches[0], reason: "exact-name" };
+  if (exactMatches.length > 1) return { reason: "ambiguous-name" };
+
+  const similarMatches = candidates.filter((source) => selfieNamesMatch(source.name, name));
+  if (similarMatches.length === 1) return { source: similarMatches[0], reason: "similar-name" };
+  if (similarMatches.length > 1) return { reason: "ambiguous-name" };
+
+  return { reason: "missing-source" };
 }
 
 function resolveSelfieCountForDates(
@@ -1934,13 +1972,19 @@ function personNameKey(value: string): string {
 
 function selfieNamesMatch(a: string, b: string): boolean {
   if (!a || !b) return false;
-  if (a === b) return true;
-  const aTokens = a.split(" ").filter((token) => token.length > 1);
-  const bTokens = b.split(" ").filter((token) => token.length > 1);
+
+  const normalizedA = normalize(a);
+  const normalizedB = normalize(b);
+  if (normalizedA === normalizedB) return true;
+
+  const aTokens = [...new Set(normalizedA.split(/\s+/).filter((token) => token.length > 1))];
+  const bTokens = [...new Set(normalizedB.split(/\s+/).filter((token) => token.length > 1))];
   if (!aTokens.length || !bTokens.length) return false;
 
+  if (aTokens.length === 1 || bTokens.length === 1) return false;
+
   const overlap = aTokens.filter((token) => bTokens.includes(token)).length;
-  return overlap >= Math.min(2, aTokens.length, bTokens.length);
+  return overlap >= 2;
 }
 
 function normalizeDateKey(value: unknown, text: string): string {
