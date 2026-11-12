@@ -54,6 +54,32 @@ test("daily report matches selfie files by employee name when code is missing", 
   assert.equal(report.performanceRows[0].selfies, 1);
 });
 
+test("daily report falls back to the employee selfie total when the exact day is missing", async () => {
+  const callLogFile = await makeCallLogWorkbook(
+    [
+      ["Emp ID", "Employee Name", "Date", "Start Time", "Event Type", "Meeting Type", "Shift"],
+      ["123", "Ali", "2026-10-01", "08:00", "Planned Call", "Face-to-Face", "Morning"],
+    ],
+    "call-log.xlsx",
+  );
+  const templateFile = await makeTemplateWorkbook("template.xlsx");
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Chat");
+  sheet.addRow(["Message Time", "Message Type", "Message Body"]);
+  sheet.addRow(["2026-10-02", "Image", "image attachment"]);
+  const buffer = await workbook.xlsx.writeBuffer();
+  const selfieFile = new File([buffer], "Ali.xlsx", {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+
+  const report = await processDailyReport(callLogFile, templateFile, selfieFile);
+
+  assert.equal(report.debug.selfieMatchedEmployees, 1);
+  assert.equal(report.debug.selfieFallbackMatches, 1);
+  assert.equal(report.debug.selfieDateMisses, 1);
+  assert.equal(report.performanceRows[0].selfies, 1);
+});
+
 test("daily report ignores similar but different employee names when matching selfies", async () => {
   const callLogFile = await makeCallLogWorkbook(
     [

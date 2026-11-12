@@ -1221,10 +1221,11 @@ function resolveSelfieCountForDates(
   );
   if (exactCount > 0) return { count: exactCount, usedFallback: false, dateMissed: false };
 
-  const sourceHasImages = [...selfieDateCounts.values()].some((count) => count > 0);
+  const totalCount = [...selfieDateCounts.values()].reduce((sum, count) => sum + count, 0);
+  const sourceHasImages = totalCount > 0;
   return {
-    count: 0,
-    usedFallback: false,
+    count: sourceHasImages ? totalCount : 0,
+    usedFallback: sourceHasImages,
     dateMissed: callDates.size > 0 && sourceHasImages,
   };
 }
