@@ -62,146 +62,99 @@ export async function processCustomSummaryReport({
   callReportFile,
   whatsappFiles,
 }: ProcessCustomSummaryInput): Promise<CustomSummaryResult> {
-  const sampleRows = await readSampleEmployeeRows(sampleFile);
+  const outputWorkbook = new ExcelJS.Workbook();
+  await outputWorkbook.xlsx.load(await sampleFile.arrayBuffer());
   const callMap = await readEmployeeCallReport(callReportFile);
   const selfieMap = await readWhatsappSelfieCounts(whatsappFiles);
-  const defaultSheetName = "MREP Monthly KPI";
-
-  const outputWorkbook = new ExcelJS.Workbook();
-  const headers = [
-    "Employee Code",
-    "Employee Name",
-    "Region",
-    "Designation",
-    "Total Plan Call Done Individual",
-    "Total Unplanned Call(Individual)",
-    "Total Morning Calls (Individual)",
-    "Total Evening Calls (Individual)",
-    "Total Reported Calls (Individual)",
-    "Avg Call Per Day",
-    "Target Doctor",
-    "Total Visited Doctors",
-    "Coverage %",
-    "Meeting Days (Includes ALL Meetings)",
-    "Leave Days",
-    "Selfies Count",
-    "Selfies Avg/Day",
+  const preview: { name: string; total: number }[] = [];
+  let totalEmployees = 0;
+  let matchedEmployees = 0;
+  let missingCallEmployees = 0;
+  const fields: { key: keyof EmployeeMetricRecord | "selfieCount" | "selfieAvg"; label: string; aliases: string[] }[] = [
+    { key: "totalPlanCallDone", label: "Total Plan Call Done Individual", aliases: [...REPORT_FIELD_ALIASES.totalPlanCallDone, "planned"] },
+    { key: "totalUnplannedCall", label: "Total Unplanned Call (Individual)", aliases: [...REPORT_FIELD_ALIASES.totalUnplannedCall, "unplanned"] },
+    { key: "totalMorningCalls", label: "Total Morning Calls (Individual)", aliases: [...REPORT_FIELD_ALIASES.totalMorningCalls, "mor", "morning"] },
+    { key: "totalEveningCalls", label: "Total Evening Calls (Individual)", aliases: [...REPORT_FIELD_ALIASES.totalEveningCalls, "eve", "evening"] },
+    { key: "totalReportedCalls", label: "Total Reported Calls (Individual)", aliases: [...REPORT_FIELD_ALIASES.totalReportedCalls, "total"] },
+    ...(["avgCallPerDay", "targetDoctor", "totalVisitedDoctors", "coveragePercent", "meetingDays", "leaveDays"] as const).map((key) => ({ key, label: REPORT_FIELD_ALIASES[key][0], aliases: REPORT_FIELD_ALIASES[key] })),
+    { key: "selfieCount", label: "Selfies Count", aliases: ["selfies count", "selfies", "selfie"] },
+    { key: "selfieAvg", label: "Selfies Avg/Day", aliases: ["selfies avg day", "selfies average day"] },
   ];
 
-  const preview: { name: string; total: number }[] = [];
-  let matchedEmployees = 0;
-  const groups = new Map<string, EmployeeRecord[]>();
-
-  for (const row of sampleRows) {
-    const teamName = row.teamName || defaultSheetName;
-    const rowsForGroup = groups.get(teamName) ?? [];
-    rowsForGroup.push(row);
-    groups.set(teamName, rowsForGroup);
-  }
-
-  const uniqueNameLookups = new Set<string>();
-  for (const [key, value] of callMap.entries()) {
-    if (!key.startsWith("::")) continue;
-    uniqueNameLookups.add(key);
-  }
-
-  const teamNames = [...groups.keys()];
-  if (!teamNames.length) {
-    const fallbackSheet = outputWorkbook.addWorksheet(defaultSheetName);
-    fallbackSheet.addRow([defaultSheetName]);
-    fallbackSheet.mergeCells(1, 1, 1, headers.length);
-    styleTitleRow(fallbackSheet, headers.length, defaultSheetName);
-    fallbackSheet.addRow(headers);
-    styleReportSheet(fallbackSheet, headers.length);
-  }
-
-  for (const teamName of teamNames) {
-    const teamSheet = outputWorkbook.addWorksheet(teamName.slice(0, 31) || defaultSheetName);
-    teamSheet.addRow([teamName]);
-    teamSheet.mergeCells(1, 1, 1, headers.length);
-    styleTitleRow(teamSheet, headers.length, teamName);
-    teamSheet.addRow(headers);
-    const teamRows = groups.get(teamName) ?? [];
-
-    for (const row of teamRows) {
-      const key = employeeKey(row.employeeCode, row.name);
-      const codeMetricLookup = row.employeeCode ? callMap.get(row.employeeCode) : undefined;
-      const nameKey = row.name ? employeeKeyFromName(row.name) : "";
-      const uniqueNameMetricLookup = nameKey && uniqueNameLookups.has(nameKey) ? callMap.get(nameKey) : undefined;
-      const callMetrics =
-        callMap.get(key) ??
-        codeMetricLookup ??
-        uniqueNameMetricLookup ??
-        {};
-      const codeSelfieLookup = row.employeeCode ? selfieMap.get(row.employeeCode) : undefined;
-      const uniqueNameSelfieLookup = nameKey && uniqueNameLookups.has(nameKey) ? selfieMap.get(nameKey) : undefined;
-      const selfieCount =
-        selfieMap.get(key) ??
-        codeSelfieLookup ??
-        uniqueNameSelfieLookup ??
-        0;
-      const selfieAvg = Math.round((selfieCount / 26) * 10) / 10;
-      const totalReportedCalls = Number(callMetrics.totalReportedCalls ?? 0);
-      if (callMetrics.totalReportedCalls != null || selfieCount > 0) {
-        matchedEmployees++;
+  for (const sheet of outputWorkbook.worksheets) {
+    const headerRowIndex = findIdentityHeaderRow(sheet);
+    if (!headerRowIndex) continue;
+    const header = sheet.getRow(headerRowIndex);
+    const codeCol = findExactHeaderColumn(header, ["employee code", "emp code", "employee id", "emp id", "t code", "code"]);
+    const nameCol = findExactHeaderColumn(header, ["employee name", "emp name", "name"]);
+    if (!codeCol && !nameCol) continue;
+    const columns = new Map<string, number>();
+    for (const field of fields) {
+      let col = findExactHeaderColumn(header, field.aliases);
+      if (!col) {
+        col = sheet.columnCount + 1;
+        const cell = header.getCell(col);
+        cell.style = structuredClone(header.getCell(Math.max(1, col - 1)).style);
+        cell.value = field.label;
+        sheet.getColumn(col).width = sheet.getColumn(Math.max(1, col - 1)).width;
+        for (let rowNumber = headerRowIndex + 1; rowNumber <= sheet.rowCount; rowNumber++) {
+          const row = sheet.getRow(rowNumber);
+          row.getCell(col).style = structuredClone(row.getCell(Math.max(1, col - 1)).style);
+        }
       }
-      preview.push({
-        name: row.name || row.employeeCode || "Unknown Employee",
-        total: totalReportedCalls,
-      });
-
-      teamSheet.addRow([
-        row.employeeCode,
-        row.name,
-        row.region,
-        row.designation,
-        callMetrics.totalPlanCallDone ?? 0,
-        callMetrics.totalUnplannedCall ?? 0,
-        callMetrics.totalMorningCalls ?? 0,
-        callMetrics.totalEveningCalls ?? 0,
-        totalReportedCalls,
-        callMetrics.avgCallPerDay ?? 0,
-        callMetrics.targetDoctor ?? 0,
-        callMetrics.totalVisitedDoctors ?? 0,
-        callMetrics.coveragePercent ?? 0,
-        callMetrics.meetingDays ?? 0,
-        callMetrics.leaveDays ?? 0,
-        selfieCount,
-        selfieAvg,
-      ]);
+      columns.set(field.key, col);
     }
-
-    styleReportSheet(teamSheet, headers.length);
+    for (let rowNumber = headerRowIndex + 1; rowNumber <= sheet.rowCount; rowNumber++) {
+      const row = sheet.getRow(rowNumber);
+      const code = codeCol ? normalizeEmployeeCode(readCellValue(row.getCell(codeCol))) : "";
+      const name = nameCol ? readCellValue(row.getCell(nameCol)).trim() : "";
+      if (!code && !name) continue;
+      if (code && !/\d/.test(code)) continue;
+      totalEmployees++;
+      const metrics = code ? callMap.get(code) : undefined;
+      if (!metrics) missingCallEmployees++;
+      const selfieCount = code ? (selfieMap.get(code) ?? 0) : 0;
+      if (metrics || selfieCount > 0) matchedEmployees++;
+      for (const field of fields) {
+        const value = field.key === "selfieCount" ? selfieCount : field.key === "selfieAvg" ? Math.round(selfieCount / 26 * 10) / 10 : metrics?.[field.key] ?? 0;
+        row.getCell(columns.get(field.key)!).value = value;
+      }
+      preview.push({ name: name || code, total: metrics?.totalReportedCalls ?? 0 });
+    }
   }
-
-  const sheet = outputWorkbook.worksheets[0] ?? outputWorkbook.addWorksheet(defaultSheetName);
-  if (outputWorkbook.worksheets.length === 1 && !sheet.getRow(1).values?.length) {
-    sheet.addRow([defaultSheetName]);
-    sheet.mergeCells(1, 1, 1, headers.length);
-    styleTitleRow(sheet, headers.length, defaultSheetName);
-    sheet.addRow(headers);
-    styleReportSheet(sheet, headers.length);
-  }
-
   const buffer = await outputWorkbook.xlsx.writeBuffer();
-  const blob = new Blob([buffer], {
-    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  });
-
   return {
-    fileName: `${sampleFile.name.replace(/\.[^.]+$/i, "") || "mrep-monthly"}-kpi.xlsx`,
-    sheetName: sheet.name,
-    totalEmployees: sampleRows.length,
+    fileName: sampleFile.name.replace(/\.[^.]+$/i, "") + "-kpi.xlsx",
+    sheetName: outputWorkbook.worksheets[0]?.name ?? "MREP Monthly KPI",
+    totalEmployees,
     matchedEmployees,
-    warnings:
-      sampleRows.length === 0
-        ? ["The sample employee sheet is empty or no employee rows were detected."]
-        : matchedEmployees === 0
-          ? ["No employee rows matched the call report or WhatsApp exports."]
-          : [],
+    warnings: totalEmployees === 0
+      ? ["No employee rows were detected in the sample workbook."]
+      : missingCallEmployees
+        ? [`${missingCallEmployees} sample employee row(s) have no matching employee code in the call report; their call metrics are 0.`]
+        : [],
     preview: preview.sort((a, b) => b.total - a.total).slice(0, 10),
-    blob,
+    blob: new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }),
   };
+}
+
+function findExactHeaderColumn(row: ExcelJS.Row, hints: string[]): number {
+  for (const hint of hints) for (let col = 1; col <= row.cellCount; col++) {
+    if (normalizeText(readCellValue(row.getCell(col))) === normalizeText(hint)) return col;
+  }
+  return 0;
+}
+
+function findIdentityHeaderRow(sheet: ExcelJS.Worksheet): number {
+  for (let i = 1; i <= Math.min(sheet.rowCount, 30); i++) {
+    const row = sheet.getRow(i);
+    if (findExactHeaderColumn(row, ["employee code", "emp code", "employee id", "emp id", "t code", "code"]) || findExactHeaderColumn(row, ["employee name", "emp name", "name"])) return i;
+  }
+  return 0;
+}
+
+function normalizeEmployeeCode(value: string): string {
+  return value.trim().toUpperCase().replace(/\s+/g, "").replace(/\.0+$/, "");
 }
 
 interface EmployeeRecord {
@@ -316,7 +269,7 @@ async function readEmployeeCallReport(file: File): Promise<Map<string, EmployeeM
       const nameCell = safeCell(row, headerMap.nameCol);
       if (!codeCell && !nameCell) continue;
 
-      const employeeCode = codeCell ? readCellValue(codeCell).trim() : "";
+      const employeeCode = codeCell ? normalizeEmployeeCode(readCellValue(codeCell)) : "";
       const rawName = nameCell ? readCellValue(nameCell).trim() : "";
       const key = employeeKey(employeeCode, rawName);
       const metrics: EmployeeMetricRecord = {
@@ -406,7 +359,7 @@ async function readWhatsappSelfieCounts(files: File[]): Promise<Map<string, numb
     }
 
     const parsedName = parseEmployeeNameFromWhatsappFile(file.name);
-    const employeeCode = parsedName.code;
+    const employeeCode = normalizeEmployeeCode(parsedName.code);
     const employeeName = parsedName.name;
 
     let total = 0;
@@ -523,15 +476,14 @@ function detectCallHeaderMap(sheet: ExcelJS.Worksheet): {
       inferHeaderColumn(sheet, REPORT_FIELD_ALIASES.leaveDays),
   };
 
-  const codeCol =
-    findHeaderColumn(firstRow, ["employee code", "emp code", "employee id", "emp id", "t code", "code"]) ||
-    inferHeaderColumn(sheet, ["employee code", "emp code", "employee id", "emp id", "t code", "code"]);
+  const identityHeader = sheet.getRow(findIdentityHeaderRow(sheet) || 1);
+  const codeCol = findExactHeaderColumn(identityHeader, ["employee code", "emp code", "employee id", "emp id", "t code", "code"]);
   const nameCol =
     findHeaderColumn(firstRow, ["employee name", "emp name", "name"]) ||
     inferHeaderColumn(sheet, ["employee name", "emp name", "name"]);
 
   return {
-    codeCol: codeCol || 1,
+    codeCol,
     nameCol: nameCol || 2,
     columns,
   };

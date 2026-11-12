@@ -34,7 +34,7 @@ test("custom summary report does not crash when a sheet is missing expected colu
 
   assert.equal(result.totalEmployees, 1);
   assert.equal(result.preview.length, 1);
-  assert.equal(result.sheetName, "MREP Monthly KPI");
+  assert.equal(result.sheetName, "Test Sheet");
 });
 
 test("custom summary report supports team sheets with a title row above the employee headers", async () => {
@@ -43,6 +43,8 @@ test("custom summary report supports team sheets with a title row above the empl
   sheet.addRow(["ALPHA 3"]);
   sheet.addRow(["SR #", "Region", "Employee Code", "Name", "City", "Designation"]);
   sheet.addRow([1, "SGD", 53081, "Malik Farooq", "SGD", "HOS"]);
+  sheet.getCell("D3").font = { name: "Arial", size: 15, bold: true };
+  sheet.getColumn(4).width = 32;
 
   const sampleFile = new File(
     [await workbook.xlsx.writeBuffer()],
@@ -70,7 +72,10 @@ test("custom summary report supports team sheets with a title row above the empl
   await generatedWorkbook.xlsx.load(await new Blob([new Uint8Array(await result.blob.arrayBuffer())], { type: result.blob.type }).arrayBuffer());
   const createdSheet = generatedWorkbook.getWorksheet("ALPHA 3");
   assert.equal(createdSheet?.getRow(1).getCell(1).value, "ALPHA 3");
-  assert.equal(createdSheet?.getRow(2).getCell(1).value, "Employee Code");
+  assert.equal(createdSheet?.getRow(2).getCell(1).value, "SR #");
+  assert.equal(createdSheet?.getCell("D3").value, "Malik Farooq");
+  assert.equal(createdSheet?.getCell("D3").font.size, 15);
+  assert.equal(createdSheet?.getColumn(4).width, 32);
 });
 
 test("custom summary report recognizes real KPI header labels with parenthetical headings", async () => {
@@ -218,6 +223,26 @@ test("custom summary report supports T. Code / Emp. ID employee headers from the
     result.preview.slice().sort((a, b) => b.total - a.total).map((item) => item.total),
     [36, 26],
   );
+});
+
+test("monthly KPI source matches Emp. ID instead of the different T. Code", async () => {
+  const sampleFile = new File([await createWorkbook([
+    ["Employee Code", "Name", "Total"],
+    [53081, "Malik Farooq", 0],
+    [98605, "Zohaib Hassan", 0],
+  ])], "sample.xlsx");
+  const callFile = new File([await createWorkbook([
+    ["Team", "T. Code", "Emp. ID", "Employee Name", "Monthly Summary", "Monthly Summary"],
+    ["Team", "T. Code", "Emp. ID", "Employee Name", "Total Plan Call Done Individual", "Total Reported Calls (Individual)"],
+    ["ALPHA", "AP3-HOS", "53081", "MALIK FAROOQ", 0, 151],
+    ["ALPHA", "AP3-MIO", "98605", "ZOHAIB HASSAN", 156, 159],
+  ])], "source.xlsx");
+  const result = await processCustomSummaryReport({ sampleFile, callReportFile: callFile, whatsappFiles: [] });
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(await result.blob.arrayBuffer());
+  assert.equal(result.matchedEmployees, 2);
+  assert.equal(workbook.worksheets[0].getCell("C2").value, 151);
+  assert.equal(workbook.worksheets[0].getCell("C3").value, 159);
 });
 
 test("custom summary report prefers the stronger duplicate-name row and exact employee code before name fallback", async () => {

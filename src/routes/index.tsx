@@ -3228,7 +3228,7 @@ function HomePage() {
                     Generate MREP Monthly KPI report
                   </h2>
                   <p className="text-sm text-muted-foreground">
-                    Matching is done by employee code first, then employee name. WhatsApp export files are counted by selfie/media cells and the average selfies per day is calculated on a 26-day basis.
+                    Employees are matched by employee code. WhatsApp export files are counted by selfie/media cells and the average selfies per day is calculated on a 26-day basis.
                   </p>
                 </div>
                 <Button
