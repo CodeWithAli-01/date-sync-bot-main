@@ -434,7 +434,7 @@ function buildDailySelfieWarnings(
       : []),
     ...(callLog.selfieMissingSources
       ? [
-          `${callLog.selfieMissingSources} matched employee row(s) had no selfie workbook matched by employee code or unique name.`,
+          `${callLog.selfieMissingSources} matched employee row(s) had no selfie workbook matched by employee code.`,
         ]
       : []),
     ...(callLog.selfieAmbiguousNameMatches
@@ -1162,12 +1162,7 @@ function findSelfieSourceForSummary(
   summary: CallSummary,
   selfieData: SelfieData,
 ): SelfieMatchResult {
-  const byCode = findSelfieSourceForEmployeeCode(summary.code, selfieData);
-  if (byCode.source) return byCode;
-
-  const byName = findSelfieSourceForEmployeeName(summary.name, selfieData);
-  if (byName.source) return byName;
-  return byCode;
+  return findSelfieSourceForEmployeeCode(summary.code, selfieData);
 }
 
 function findSelfieSourceForEmployeeCode(
@@ -1224,8 +1219,8 @@ function resolveSelfieCountForDates(
   const totalCount = [...selfieDateCounts.values()].reduce((sum, count) => sum + count, 0);
   const sourceHasImages = totalCount > 0;
   return {
-    count: sourceHasImages ? totalCount : 0,
-    usedFallback: sourceHasImages,
+    count: 0,
+    usedFallback: false,
     dateMissed: callDates.size > 0 && sourceHasImages,
   };
 }
@@ -1990,7 +1985,7 @@ function selfieNamesMatch(a: string, b: string): boolean {
 
 function normalizeDateKey(value: unknown, text: string): string {
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return localDateKey(value);
+    return [value.getUTCFullYear(), String(value.getUTCMonth() + 1).padStart(2, "0"), String(value.getUTCDate()).padStart(2, "0")].join("-");
   }
 
   const raw = String(text ?? "").trim();
