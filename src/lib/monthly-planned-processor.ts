@@ -20,6 +20,8 @@ export interface MonthlyPlannedResult {
 }
 
 export interface MonthlyPlannedPerformanceRow {
+  morningCalls: number;
+  eveningCalls: number;
   teamName: string;
   employeeCode: string;
   name: string;
@@ -73,6 +75,8 @@ interface MonthlySummary {
   planned: number;
   unplanned: number;
   totalCalls: number;
+  morningCalls: number;
+  eveningCalls: number;
   dailyDetails: Map<string, MutableMonthlyDayDetail>;
 }
 
@@ -81,6 +85,7 @@ interface MutableMonthlyDayDetail {
   cpMinutes: number | null;
   planned: number;
   unplanned: number;
+  totalCalls: number;
   morningCalls: number;
   morningFirstMinutes: number | null;
   morningLastMinutes: number | null;
@@ -105,6 +110,8 @@ interface MonthlyColumns {
   morningWorkingAvgCol: number;
   eveningWorkingAvgCol: number;
   totalWorkingAvgCol: number;
+  totalMorningCallsCol: number;
+  totalEveningCallsCol: number;
 }
 
 const CALL_HEADER_HINTS: Record<string, string[]> = {
@@ -150,7 +157,7 @@ export async function processMonthlyPlannedReport(
   let firstSheetName = sheets[0].name;
 
   for (const sheet of sheets) {
-    const summaries = filterMonthlySummariesForSheet(callLog.summaries, sheet, sheets.length > 1);
+    const summaries = callLog.summaries;
     const result = fillMonthlyPlannedSheet(sheet, summaries, callLog.dates);
     firstSheetName = firstSheetName || sheet.name;
     matchedEmployees += result.matchedEmployees;
@@ -213,6 +220,8 @@ function fillMonthlyPlannedSheet(
     if (!match) {
       clearMonthlyCells(row, columns);
       performanceRows.push({
+        morningCalls: 0,
+        eveningCalls: 0,
         teamName: sheet.name,
         employeeCode: code,
         name,
@@ -246,17 +255,28 @@ function fillMonthlyPlannedSheet(
     row.getCell(columns.unplannedCol).value = match.unplanned;
     row.getCell(columns.unplannedAvgCol).value = average(match.unplanned, days);
     row.getCell(columns.totalCallsCol).value = match.totalCalls;
+    row.getCell(columns.totalMorningCallsCol).value = match.morningCalls;
+    row.getCell(columns.totalEveningCallsCol).value = match.eveningCalls;
     row.getCell(columns.totalCallsAvgCol).value = average(match.totalCalls, days);
-    row.getCell(columns.cpAvgTimeCol).value = averageTime(match.cpTimes);
+    const cpAvgTime = averageTime([...match.dailyDetails.values()].flatMap((day) => day.cpMinutes === null ? [] : [day.cpMinutes]));
+    row.getCell(columns.cpAvgTimeCol).value = cpAvgTime;
     const workingDayDetails = dailyDetails.filter((detail) => detail.totalCalls > 0);
+    const hasMorningTimes = (detail: MonthlyPlannedDayDetail) => {
+      const source = match.dailyDetails.get(detail.date)!;
+      return source.cpMinutes !== null && source.morningLastMinutes !== null && source.morningLastMinutes >= source.cpMinutes;
+    };
+    const hasEveningTimes = (detail: MonthlyPlannedDayDetail) => {
+      const source = match.dailyDetails.get(detail.date)!;
+      return source.eveningFirstMinutes !== null && source.eveningLastMinutes !== null;
+    };
     row.getCell(columns.morningWorkingAvgCol).value = averageWorkingTime(
-      workingDayDetails.map((detail) => detail.morningMinutes),
+      workingDayDetails.filter(hasMorningTimes).map((detail) => detail.morningMinutes),
     );
     row.getCell(columns.eveningWorkingAvgCol).value = averageWorkingTime(
-      workingDayDetails.map((detail) => detail.eveningMinutes),
+      workingDayDetails.filter(hasEveningTimes).map((detail) => detail.eveningMinutes),
     );
     row.getCell(columns.totalWorkingAvgCol).value = averageWorkingTime(
-      workingDayDetails.map((detail) => detail.totalWorkingMinutes),
+      workingDayDetails.filter((detail) => hasMorningTimes(detail) || hasEveningTimes(detail)).map((detail) => detail.totalWorkingMinutes),
     );
     styleMonthlyCells(row, columns);
 
@@ -264,6 +284,8 @@ function fillMonthlyPlannedSheet(
     const lowReasons = monthlyLowReasons(issueCounts);
     if (match.totalCalls > 0) preview.push({ name: name || match.name, total: match.totalCalls });
     performanceRows.push({
+      morningCalls: match.morningCalls,
+      eveningCalls: match.eveningCalls,
       teamName: match.teamName || sheet.name,
       employeeCode: code,
       name: name || match.name,
@@ -273,7 +295,7 @@ function fillMonthlyPlannedSheet(
       unplanned: match.unplanned,
       totalCalls: match.totalCalls,
       plannedPercent: percent(match.planned, match.totalCalls),
-      cpAvgTime: averageTime(match.cpTimes),
+      cpAvgTime,
       dailyDetails,
       lateCpDays: issueCounts.lateCpDays,
       lowCallDays: issueCounts.lowCallDays,
@@ -335,7 +357,7 @@ async function readMonthlyCallLog(input: File | File[]): Promise<{
         );
         const teamName = columns.teamCol ? cellText(row.getCell(columns.teamCol)).trim() : "";
         const sourceName = `${file.name} ${sheet.name}`;
-        const summaryKey = `${normalizeTeamName(teamName || sourceName)}|${code}`;
+        const summaryKey = code;
         let summary = byCode.get(summaryKey);
         if (!summary) {
           summary = {
@@ -348,6 +370,8 @@ async function readMonthlyCallLog(input: File | File[]): Promise<{
             planned: 0,
             unplanned: 0,
             totalCalls: 0,
+            morningCalls: 0,
+            eveningCalls: 0,
             dailyDetails: new Map(),
           };
           byCode.set(summaryKey, summary);
@@ -355,18 +379,18 @@ async function readMonthlyCallLog(input: File | File[]): Promise<{
 
         sourceRows++;
         const isContactPoint = matchesAny(meetingType, ["contact point", "contactpoint", "cp"]);
-        const isFaceToFaceCall = matchesAny(meetingType, [
+        const isFaceToFaceCall = [
           "face to face call",
           "face to face",
           "face to face calls",
           "f2f",
           "f2f call",
           "face toface",
-        ]);
+        ].some((label) => meetingType === normalize(label));
         const isPlannedCall = matchesAny(eventType, ["planned", "planned call", "plannedcall"]);
         const isUnplannedCall = matchesAny(eventType, ["unplanned", "unplanned call", "unplannedcall"]);
 
-        if (dateKey && !isContactPoint && (isPlannedCall || isUnplannedCall || isFaceToFaceCall)) {
+        if (dateKey && isFaceToFaceCall) {
           summary.days.add(dateKey);
           dates.add(dateKey);
         }
@@ -395,6 +419,11 @@ async function readMonthlyCallLog(input: File | File[]): Promise<{
         if (!isFaceToFaceCall && day) {
           day.activities.push(monthlyActivityText(meetingTypeText, callTime, shift || "No shift"));
         }
+        if (!isFaceToFaceCall) continue;
+        summary.totalCalls++;
+        if (shift === "morning") summary.morningCalls++;
+        if (shift === "evening") summary.eveningCalls++;
+        if (day) day.totalCalls++;
         if (isPlannedCall) {
           summary.planned++;
           if (day) day.planned++;
@@ -403,22 +432,21 @@ async function readMonthlyCallLog(input: File | File[]): Promise<{
           summary.unplanned++;
           if (day) day.unplanned++;
         }
-        if (day && (isPlannedCall || isUnplannedCall)) {
+        if (day) {
           if (shift === "morning") {
             day.morningCalls++;
-            if (callTime > 0) {
+            if (callTime >= 0) {
               day.morningFirstMinutes = minNullable(day.morningFirstMinutes, callTime);
               day.morningLastMinutes = maxNullable(day.morningLastMinutes, callTime);
             }
           } else if (shift === "evening") {
             day.eveningCalls++;
-            if (callTime > 0) {
+            if (callTime >= 0) {
               day.eveningFirstMinutes = minNullable(day.eveningFirstMinutes, callTime);
               day.eveningLastMinutes = maxNullable(day.eveningLastMinutes, callTime);
             }
           }
         }
-        summary.totalCalls = summary.planned + summary.unplanned;
       }
     }
   }
@@ -518,6 +546,8 @@ function ensureMonthlyColumns(sheet: ExcelJS.Worksheet): MonthlyColumns {
       ["morningWorkingAvgCol", "Morning Working Avg"],
       ["eveningWorkingAvgCol", "Evening Working Avg"],
       ["totalWorkingAvgCol", "Total Working Avg"],
+      ["totalMorningCallsCol", "Total Morning Calls"],
+      ["totalEveningCallsCol", "Total Evening Calls"],
     ];
 
     const result: MonthlyColumns = {
@@ -535,6 +565,8 @@ function ensureMonthlyColumns(sheet: ExcelJS.Worksheet): MonthlyColumns {
       morningWorkingAvgCol: 0,
       eveningWorkingAvgCol: 0,
       totalWorkingAvgCol: 0,
+      totalMorningCallsCol: 0,
+      totalEveningCallsCol: 0,
     };
 
     const titleRow = sheet.getRow(Math.max(1, rowNumber - 1));
@@ -589,6 +621,8 @@ function monthlyValueColumns(columns: MonthlyColumns): number[] {
     columns.morningWorkingAvgCol,
     columns.eveningWorkingAvgCol,
     columns.totalWorkingAvgCol,
+    columns.totalMorningCallsCol,
+    columns.totalEveningCallsCol,
   ];
 }
 
@@ -651,6 +685,7 @@ function ensureMonthlyDayDetail(summary: MonthlySummary, date: string): MutableM
     cpMinutes: null,
     planned: 0,
     unplanned: 0,
+    totalCalls: 0,
     morningCalls: 0,
     morningFirstMinutes: null,
     morningLastMinutes: null,
@@ -669,7 +704,7 @@ function monthlyDailyDetails(summary: MonthlySummary): MonthlyPlannedDayDetail[]
     .map((detail) => {
       const morningMinutes = shiftMinutes(
         detail.cpMinutes,
-        detail.morningFirstMinutes,
+        null,
         detail.morningLastMinutes,
       );
       const eveningMinutes = shiftMinutes(
@@ -679,7 +714,7 @@ function monthlyDailyDetails(summary: MonthlySummary): MonthlyPlannedDayDetail[]
       );
       const morningHours = roundHours(morningMinutes / 60);
       const eveningHours = roundHours(eveningMinutes / 60);
-      const totalCalls = detail.planned + detail.unplanned;
+      const totalCalls = detail.totalCalls;
       const totalWorkingMinutes = morningMinutes + eveningMinutes;
       const totalWorkingHours = roundHours(totalWorkingMinutes / 60);
       const issues = monthlyDayIssues({
@@ -773,7 +808,7 @@ function shiftMinutes(
   lastCallMinutes: number | null,
 ): number {
   if (lastCallMinutes === null) return 0;
-  const start = firstCallMinutes ?? preferredStartMinutes;
+  const start = preferredStartMinutes ?? firstCallMinutes;
   if (start === null || lastCallMinutes <= start) return 0;
   return lastCallMinutes - start;
 }
@@ -817,12 +852,15 @@ function minutesToTimeOrBlank(totalMinutes: number | null): string {
 }
 
 function timeToMinutes(value: unknown, text: string): number {
-  if (value instanceof Date) return value.getHours() * 60 + value.getMinutes();
-  const match = String(text ?? "").match(/\b(\d{1,2}):(\d{2})(?::\d{2})?\b/);
+  if (value instanceof Date) return value.getUTCHours() * 60 + value.getUTCMinutes();
+  if (typeof value === "number" && Number.isFinite(value)) return Math.round(((value % 1 + 1) % 1) * 1440) % 1440;
+  const match = String(text ?? "").match(/\b(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)?\b/i);
   if (!match) return -1;
-  const hour = Number(match[1]);
+  let hour = Number(match[1]);
   const minute = Number(match[2]);
-  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return -1;
+  const suffix = match[3]?.toUpperCase();
+  if (minute > 59 || (suffix ? hour < 1 || hour > 12 : hour > 23)) return -1;
+  if (suffix) hour = hour % 12 + (suffix === "PM" ? 12 : 0);
   return hour * 60 + minute;
 }
 

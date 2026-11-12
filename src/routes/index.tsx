@@ -396,6 +396,7 @@ function HomePage() {
   const excelInputRef = useRef<HTMLInputElement>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
+  const historyPreviewRef = useRef<HTMLDivElement>(null);
   const callLogInputRef = useRef<HTMLInputElement>(null);
   const dailySelfieInputRef = useRef<HTMLInputElement>(null);
   const dailyTemplateInputRef = useRef<HTMLInputElement>(null);
@@ -1928,6 +1929,9 @@ function HomePage() {
       }
       const preview = await buildSheetPreview(item.blob);
       setHistoryPreview({ ...preview, name: item.fileName });
+      setTimeout(() => {
+        historyPreviewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 0);
     } catch (error) {
       console.error("History preview failed", error);
       toast.error("Unable to preview history file.");
@@ -3094,7 +3098,7 @@ function HomePage() {
 
         <main className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_260px]">
           <div className="space-y-6">
-            <div className="grid gap-4 lg:grid-cols-2">
+            <div className="grid gap-4 lg:grid-cols-3">
               <UploadCard
                 step={1}
                 title="Sample Employee File"
@@ -3171,58 +3175,57 @@ function HomePage() {
                   />
                 )}
               </UploadCard>
-            </div>
-
-            <UploadCard
-              step={3}
-              title="WhatsApp Selfie Export Files"
-              subtitle={
-                customWhatsappFiles.length
-                  ? `${customWhatsappFiles.length} file(s) selected`
-                  : "Upload employee WhatsApp export .xlsx files"
-              }
-              icon={<FileSpreadsheet className="h-5 w-5" />}
-              accept=".xlsx,.xls,.xlsm"
-              ready={customWhatsappFiles.length > 0}
-              onClick={() => document.getElementById("mrep-whatsapp-input")?.click()}
-            >
-              <input
-                id="mrep-whatsapp-input"
-                type="file"
+              <UploadCard
+                step={3}
+                title="WhatsApp Selfie Export Files"
+                subtitle={
+                  customWhatsappFiles.length
+                    ? `${customWhatsappFiles.length} file(s) selected`
+                    : "Upload employee WhatsApp export .xlsx files"
+                }
+                icon={<FileSpreadsheet className="h-5 w-5" />}
                 accept=".xlsx,.xls,.xlsm"
-                multiple
-                className="hidden"
-                onChange={(event) => {
-                  const files = Array.from(event.target.files ?? []);
-                  if (!files.length) return;
-                  setCustomWhatsappFiles(files);
-                  setCustomSummaryReport(null);
-                  event.target.value = "";
-                }}
-              />
-              {customWhatsappFiles.length ? (
-                <MultiFileList
-                  files={customWhatsappFiles}
-                  onClear={() => {
-                    setCustomWhatsappFiles([]);
+                ready={customWhatsappFiles.length > 0}
+                onClick={() => document.getElementById("mrep-whatsapp-input")?.click()}
+              >
+                <input
+                  id="mrep-whatsapp-input"
+                  type="file"
+                  accept=".xlsx,.xls,.xlsm"
+                  multiple
+                  className="hidden"
+                  onChange={(event) => {
+                    const files = Array.from(event.target.files ?? []);
+                    if (!files.length) return;
+                    setCustomWhatsappFiles(files);
                     setCustomSummaryReport(null);
-                  }}
-                  onRemove={(file) => {
-                    setCustomWhatsappFiles((files) => files.filter((item) => !sameFile(item, file)));
-                    setCustomSummaryReport(null);
+                    event.target.value = "";
                   }}
                 />
-              ) : (
-                <EmptyHint
-                  icon={<FileSpreadsheet className="h-5 w-5" />}
-                  label="Choose WhatsApp export files"
-                />
-              )}
-            </UploadCard>
+                {customWhatsappFiles.length ? (
+                  <MultiFileList
+                    files={customWhatsappFiles}
+                    onClear={() => {
+                      setCustomWhatsappFiles([]);
+                      setCustomSummaryReport(null);
+                    }}
+                    onRemove={(file) => {
+                      setCustomWhatsappFiles((files) => files.filter((item) => !sameFile(item, file)));
+                      setCustomSummaryReport(null);
+                    }}
+                  />
+                ) : (
+                  <EmptyHint
+                    icon={<FileSpreadsheet className="h-5 w-5" />}
+                    label="Choose WhatsApp export files"
+                  />
+                )}
+              </UploadCard>
+            </div>
 
             <Card className="border-border bg-card p-6 shadow-[var(--shadow-soft)]">
               <div className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
-                <div>
+                <div className="min-w-0">
                   <div className="text-xs font-bold uppercase text-primary">Step 4</div>
                   <h2 className="mt-1 text-lg font-semibold text-foreground">
                     Generate MREP Monthly KPI report
@@ -3235,7 +3238,7 @@ function HomePage() {
                   size="lg"
                   onClick={handleCustomSummaryGenerate}
                   disabled={!customSampleFile || !customCallReportFile || customReportLoading}
-                  className="w-full min-w-44 sm:w-auto"
+                  className="w-full shrink-0 sm:w-auto"
                 >
                   {customReportLoading ? (
                     <>
@@ -4502,7 +4505,7 @@ function HomePage() {
           </Card>
 
           {(historyPreviewLoading || historyPreview) && (
-            <Card className="mt-6 border-border bg-card p-5 shadow-[var(--shadow-soft)]">
+            <Card ref={historyPreviewRef} className="mt-6 border-border bg-card p-5 shadow-[var(--shadow-soft)]">
               <div className="mb-3 flex items-center justify-between gap-3">
                 <div>
                   <div className="text-xs font-bold uppercase text-primary">Preview</div>
@@ -6186,6 +6189,8 @@ function buildMonthlyPlannedPerformanceReport(report: MonthlyPlannedResult): Per
       plannedCalls: row.planned,
       unplannedCalls: row.unplanned,
       totalCalls: row.totalCalls,
+      morningCalls: row.morningCalls,
+      eveningCalls: row.eveningCalls,
       plannedPercent: row.plannedPercent,
       cpAvgTime: row.cpAvgTime,
       lateCpDays: row.lateCpDays,
@@ -8060,9 +8065,9 @@ async function buildMonthlyPlannedPerformanceWorkbook(
   });
 }
 
-const MONTHLY_PLANNED_BASE_HEADERS = ["Employee Code", "Name", "Designation", "Region"] as const;
+const MONTHLY_PLANNED_BASE_HEADERS = ["Employee Code", "Name", "Designation", "Region", "Total Morning Calls", "Total Evening Calls"] as const;
 
-const MONTHLY_PLANNED_BASE_WIDTHS = [14, 22, 14, 12];
+const MONTHLY_PLANNED_BASE_WIDTHS = [14, 22, 14, 12, 22, 22];
 
 function addMonthlyPlannedTeamPerformanceWorksheet(
   wb: import("exceljs").Workbook,
@@ -8103,6 +8108,8 @@ function addMonthlyPlannedTeamPerformanceWorksheet(
         row.name,
         row.designation ?? detailValue(row.details ?? {}, "designation"),
         row.region ?? detailValue(row.details ?? {}, "region"),
+        detailValue(row.details ?? {}, "morningCalls"),
+        detailValue(row.details ?? {}, "eveningCalls"),
         ...dates.map((date) => monthlyPlannedDateCell(detailsByDate.get(date))),
       ]);
       styleMonthlyPlannedDataRow(ws.getRow(index + 4), headers.length);
