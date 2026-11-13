@@ -16,6 +16,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { parsePdf, type PdfParseResult } from "@/lib/pdf-extractor";
 import { processExcel, type ProcessReport } from "@/lib/excel-processor";
 import { AvgPerDayReport } from "@/components/avg-per-day-report";
+import { HelpSupport } from "@/components/help-support";
+import { LifeBuoy } from "lucide-react";
 import {
   processBulkDailyReports,
   processDailyReport,
@@ -74,6 +76,7 @@ type ActiveModule =
   | "monthly-planned"
   | "custom-report"
   | "avg-per-day"
+  | "help-support"
   | "history"
   | "profile"
   | null;
@@ -2300,6 +2303,15 @@ function HomePage() {
     );
   }
 
+  if (activeModule === "help-support") {
+    return (
+      <AppShell activeModule={activeModule} dashboardLine={dashboardLine} user={authUser}
+        profilePhoto={profilePhoto} onNavigate={setActiveModule} onOpenHistory={openHistory}>
+        <HelpSupport />
+      </AppShell>
+    );
+  }
+
   if (activeModule === "avg-per-day") {
     return (
       <AppShell activeModule={activeModule} dashboardLine={dashboardLine} user={authUser}
@@ -3276,6 +3288,13 @@ function AppShell({
             label="History"
             description="Files"
             onClick={onOpenHistory}
+          />
+          <SidebarButton
+            active={activeModule === "help-support"}
+            icon={<LifeBuoy className="h-4 w-4" />}
+            label="Help & Support"
+            description="Report guides"
+            onClick={() => onNavigate("help-support")}
           />
           <SidebarButton
             active={activeModule === "profile"}
