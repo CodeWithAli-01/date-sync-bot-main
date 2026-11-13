@@ -1320,6 +1320,7 @@ function HomePage() {
           activeDevices={activeDevices}
           signingOut={signingOut}
           onProfilePhotoChange={updateProfilePhoto}
+          onProfileNameChange={setAuthUser}
           onChange={updateThemeColor}
           onToggleMode={toggleThemeMode}
           onSignOut={signOut}
@@ -1447,7 +1448,7 @@ function HomePage() {
 
               <UploadCard
                 step={3}
-                title="Selfies Excel (Optional)"
+                title="Selfies Excel"
                 subtitle={
                   dailySelfiesAttached
                     ? `${dailySelfieFiles.length} selfies file(s) selected`
@@ -1731,8 +1732,8 @@ function HomePage() {
               <div className="space-y-3">
                 <ChecklistItem done={callLogFiles.length > 0} label="Call log attached" />
                 <ChecklistItem
-                  done
-                  label={dailySelfiesAttached ? "Selfies Excel attached" : "Selfies Excel optional"}
+                  done={dailySelfiesAttached}
+                  label="Selfies Excel attached"
                 />
                 <ChecklistItem done={Boolean(dailyTemplateFile)} label="Sample file attached" />
                 <ChecklistItem
@@ -3521,13 +3522,17 @@ function DashboardHome({
               through a cleaner reporting workflow.
             </p>
             <div className="mt-5 grid gap-3 sm:flex sm:flex-wrap">
-              <Button onClick={() => onNavigate("daily-report")} className="neuro-button">
+              <Button variant="outline" onClick={() => onNavigate("daily-report")} className="neuro-button-muted hover:border-primary hover:bg-primary hover:text-primary-foreground">
                 <Zap className="mr-2 h-4 w-4" />
                 Start daily report
               </Button>
-              <Button variant="outline" onClick={onOpenHistory} className="neuro-button-muted">
+              <Button variant="outline" onClick={onOpenHistory} className="neuro-button-muted hover:border-primary hover:bg-primary hover:text-primary-foreground">
                 <HistoryIcon className="mr-2 h-4 w-4" />
                 View history
+              </Button>
+              <Button variant="outline" onClick={() => onNavigate("help-support")} className="neuro-button-muted hover:border-primary hover:bg-primary hover:text-primary-foreground">
+                <LifeBuoy className="mr-2 h-4 w-4" />
+                Help &amp; Support
               </Button>
             </div>
           </div>
@@ -3700,6 +3705,8 @@ function UserAvatar({
 
 function getUserDisplayName(user: User): string {
   const metadata = user.user_metadata ?? {};
+  const customName = stringValue(metadata.display_name);
+  if (customName) return customName;
   const metadataName =
     stringValue(metadata.full_name) ||
     stringValue(metadata.name) ||
@@ -3877,6 +3884,7 @@ function ProfilePage({
   activeDevices,
   signingOut,
   onProfilePhotoChange,
+  onProfileNameChange,
   onChange,
   onToggleMode,
   onSignOut,
@@ -3889,6 +3897,7 @@ function ProfilePage({
   activeDevices: ActiveDeviceSession[];
   signingOut: boolean;
   onProfilePhotoChange: (photo: string | null) => void;
+  onProfileNameChange: (user: User) => void;
   onChange: (color: string) => void;
   onToggleMode: () => void;
   onSignOut: () => void;
@@ -3900,9 +3909,50 @@ function ProfilePage({
   const [cropY, setCropY] = useState(0);
   const [cropSaving, setCropSaving] = useState(false);
   const [showEditProfile, setShowEditProfile] = useState(false);
+  const editProfileButtonRef = useRef<HTMLButtonElement>(null);
+  const editProfilePanelRef = useRef<HTMLDivElement>(null);
   const [showColorPanel, setShowColorPanel] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
   const displayName = getUserDisplayName(user);
+  const [nameDraft, setNameDraft] = useState(displayName);
+  const [nameSaving, setNameSaving] = useState(false);
+
+  useEffect(() => { setNameDraft(displayName); }, [displayName]);
+
+  useEffect(() => {
+    if (!showEditProfile || cropImage) return;
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node
+        && !editProfileButtonRef.current?.contains(target)
+        && !editProfilePanelRef.current?.contains(target)) {
+        setShowEditProfile(false);
+      }
+    };
+    document.addEventListener("pointerdown", closeOnOutsideClick, true);
+    return () => document.removeEventListener("pointerdown", closeOnOutsideClick, true);
+  }, [showEditProfile, cropImage]);
+
+  const saveProfileName = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const name = nameDraft.trim();
+    if (!name || name.length > 80) {
+      toast.error("Please enter a name between 1 and 80 characters.");
+      return;
+    }
+    if (nameSaving) return;
+    setNameSaving(true);
+    try {
+      const { data, error } = await supabase.auth.updateUser({ data: { display_name: name } });
+      if (error || !data.user) throw error ?? new Error("Profile update failed");
+      onProfileNameChange(data.user);
+      toast.success("Profile name updated.");
+    } catch {
+      toast.error("Unable to save your name. Please try again.");
+    } finally {
+      setNameSaving(false);
+    }
+  };
 
   const onProfilePhotoSelected = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -4157,6 +4207,7 @@ function ProfilePage({
           />
           <Button
             type="button"
+            ref={editProfileButtonRef}
             onClick={() => setShowEditProfile((value) => !value)}
             className="neuro-button w-full"
           >
@@ -4165,7 +4216,25 @@ function ProfilePage({
           </Button>
 
           {showEditProfile && (
-            <div className="mt-4 grid gap-2">
+            <div ref={editProfilePanelRef} className="mt-4 grid gap-2">
+              <form onSubmit={saveProfileName} className="mb-2 grid gap-2">
+                <label htmlFor="profile-display-name" className="text-sm font-semibold">Display name</label>
+                <input
+                  id="profile-display-name"
+                  type="text"
+                  value={nameDraft}
+                  onChange={(event) => setNameDraft(event.target.value)}
+                  maxLength={80}
+                  required
+                  disabled={nameSaving}
+                  autoComplete="nickname"
+                  className="neuro-inset min-w-0 w-full rounded-xl px-3 py-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+                <Button type="submit" disabled={nameSaving || !nameDraft.trim() || nameDraft.trim() === displayName} className="neuro-button w-full">
+                  {nameSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                  {nameSaving ? "Saving..." : "Save name"}
+                </Button>
+              </form>
               <Button
                 type="button"
                 onClick={() => photoInputRef.current?.click()}

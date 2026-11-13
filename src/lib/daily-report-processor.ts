@@ -255,6 +255,7 @@ export async function processDailyReport(
   const templateWorkbook = new ExcelJS.Workbook();
   await templateWorkbook.xlsx.load(await templateFile.arrayBuffer());
   removeRemarksColumnsFromWorkbook(templateWorkbook);
+  ensureDailyTemplateColumns(templateWorkbook);
   const sheet = selectDailyTemplateSheet(templateWorkbook, callLog);
   if (!sheet) throw new Error("Template workbook does not contain a sheet.");
 
@@ -278,6 +279,7 @@ export async function processBulkDailyReports(
   const teamsWorkbook = new ExcelJS.Workbook();
   await teamsWorkbook.xlsx.load(await teamsWorkbookFile.arrayBuffer());
   removeRemarksColumnsFromWorkbook(teamsWorkbook);
+  ensureDailyTemplateColumns(teamsWorkbook);
   const allTeamSources = findDailyTeamSources(teamsWorkbook);
   const teamSources = callLog.selfieFileCount
     ? allTeamSources
@@ -1487,6 +1489,35 @@ function parseTimeToMinutes(value: string): number | null {
   if (meridiem === "pm" && hours < 12) hours += 12;
   if (meridiem === "am" && hours === 12) hours = 0;
   return hours * 60 + minutes;
+}
+
+function ensureDailyTemplateColumns(workbook: ExcelJS.Workbook): void {
+  const fields = [
+    ["planned", "Planned"], ["unplanned", "Unplanned"],
+    ["morning", "Mor"], ["evening", "Eve"], ["total", "Total"], ["cp", "Cp"],
+  ] as const;
+  for (const sheet of workbook.worksheets) {
+    for (let r = 1; r <= Math.min(sheet.rowCount, 12); r++) {
+      const header = sheet.getRow(r);
+      const labels = new Map<string, number>();
+      header.eachCell((cell, col) => labels.set(normalize(cellText(cell)), col));
+      if (!findHeader(labels, TEMPLATE_HEADER_HINTS.code, false)
+        || !findHeader(labels, TEMPLATE_HEADER_HINTS.name, false)) continue;
+      let lastCol = sheet.columnCount;
+      const styleCol = findLastUsedColumn(sheet, r);
+      for (const [key, label] of fields) {
+        if (findHeader(labels, TEMPLATE_HEADER_HINTS[key], false)) continue;
+        const col = ++lastCol;
+        sheet.getColumn(col).width = Math.max(sheet.getColumn(styleCol).width ?? 12, 12);
+        for (let rowNumber = r; rowNumber <= sheet.rowCount; rowNumber++) {
+          const row = sheet.getRow(rowNumber);
+          row.getCell(col).style = cloneStyle(row.getCell(styleCol).style);
+        }
+        header.getCell(col).value = label;
+      }
+      break;
+    }
+  }
 }
 
 function findTemplateColumns(sheet: ExcelJS.Worksheet, required = true): DailyColumns | null {
