@@ -3263,7 +3263,7 @@ function HomePage() {
                   size="lg"
                   onClick={handleCustomSummaryGenerate}
                   disabled={!customSampleFile || !customCallReportFile || customReportLoading}
-                  className="w-full shrink-0 sm:w-auto"
+                  className="w-full shrink-0 shadow-[var(--shadow-elegant)] sm:w-auto"
                 >
                   {customReportLoading ? (
                     <>
@@ -3273,7 +3273,7 @@ function HomePage() {
                   ) : (
                     <>
                       <Sparkles className="mr-2 h-4 w-4" />
-                      Generate MREP Report
+                      Generate Report
                     </>
                   )}
                 </Button>
@@ -5014,11 +5014,11 @@ function AppShell({
   return (
     <div className="min-h-screen bg-background text-foreground">
       <Toaster richColors position="top-center" />
-      <aside className="neuro-sidebar app-sidebar fixed z-40 flex h-auto flex-col rounded-2xl p-2 sm:p-3 lg:inset-y-4 lg:left-4 lg:right-auto lg:w-72">
+      <aside className="neuro-sidebar app-sidebar fixed z-40 flex h-auto min-h-0 flex-col overflow-hidden rounded-2xl p-2 sm:p-3 lg:inset-y-4 lg:left-4 lg:right-auto lg:w-72">
         <button
           type="button"
           onClick={() => onNavigate(null)}
-          className="neuro-brand flex w-full items-center gap-3 rounded-xl p-2.5 text-left transition sm:p-3"
+          className="neuro-brand flex w-full shrink-0 items-center gap-3 rounded-xl p-2.5 text-left transition sm:p-3"
         >
           <BrandMark icon={<Activity className="h-5 w-5" />} />
           <div className="min-w-0">
@@ -5027,7 +5027,7 @@ function AppShell({
           </div>
         </button>
 
-        <nav className="app-sidebar-nav mt-2 flex gap-2 overflow-x-auto pb-1 lg:mt-3 lg:flex-1 lg:flex-col lg:overflow-visible lg:pb-0">
+        <nav className="app-sidebar-nav mt-2 flex min-h-0 gap-2 overflow-x-auto pb-1 lg:mt-3 lg:flex-1 lg:flex-col lg:overflow-x-hidden lg:overflow-y-auto lg:pb-0">
           <SidebarButton
             active={!activeModule}
             icon={<Home className="h-4 w-4" />}
@@ -5065,7 +5065,7 @@ function AppShell({
         <button
           type="button"
           onClick={() => onNavigate("profile")}
-          className={`neuro-user mt-3 hidden items-center gap-3 rounded-xl p-3 text-left transition lg:flex ${
+          className={`neuro-user mt-3 hidden shrink-0 items-center gap-3 rounded-xl p-3 text-left transition lg:flex ${
             activeModule === "profile" ? "is-active" : ""
           }`}
         >
@@ -5107,7 +5107,7 @@ function SidebarButton({
     <button
       type="button"
       onClick={onClick}
-      className={`neuro-nav-item group flex min-w-[4.9rem] flex-col items-center justify-center gap-1 rounded-xl px-2 py-2 text-center transition sm:min-w-[5.6rem] lg:min-h-14 lg:w-full lg:min-w-0 lg:flex-row lg:justify-start lg:gap-3 lg:px-3 lg:text-left ${
+      className={`neuro-nav-item group flex min-w-[4.9rem] shrink-0 flex-col items-center justify-center gap-1 rounded-xl px-2 py-2 text-center transition sm:min-w-[5.6rem] lg:min-h-14 lg:w-full lg:min-w-0 lg:flex-row lg:justify-start lg:gap-3 lg:px-3 lg:text-left ${
         active ? "is-active" : ""
       } ${className}`}
     >

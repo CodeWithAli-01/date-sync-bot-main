@@ -82,9 +82,9 @@ export function AvgPerDayReport({ buildPreview, onGenerated }: {
           <h2 className="mt-1 text-lg font-semibold text-foreground">Generate Avg. Per Day report</h2>
           <p className="text-sm text-muted-foreground">Match employee IDs and copy Morning Calls, Evening Calls, Total Calls, Avg. Call Per Day., and Field Days into your sample.</p>
         </div>
-        <Button size="lg" className="w-full shrink-0 md:w-auto" disabled={!sample || !source || processing} onClick={generate}>
+        <Button size="lg" className="w-full shrink-0 shadow-[var(--shadow-elegant)] md:w-auto" disabled={!sample || !source || processing} onClick={generate}>
           {processing ? <Loader2 className="animate-spin" /> : <Sparkles />}
-          {processing ? "Processing..." : "Generate Avg. Per Day Report"}
+          {processing ? "Processing..." : "Generate Report"}
         </Button>
       </Card>
       {result && <Card className="space-y-4 p-6">
