@@ -3173,6 +3173,29 @@ function AppShell({
   children: React.ReactNode;
 }) {
   const displayName = getUserDisplayName(user);
+  const sidebarRef = useRef<HTMLElement>(null);
+  const sidebarNavRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    const sidebar = sidebarRef.current;
+    const nav = sidebarNavRef.current;
+    if (!sidebar || !nav) return;
+
+    const scrollSidebar = (event: WheelEvent) => {
+      if (event.ctrlKey) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const vertical = getComputedStyle(nav).flexDirection === "column";
+      const pageSize = vertical ? nav.clientHeight : nav.clientWidth;
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? pageSize : 1;
+      if (vertical) nav.scrollTop += event.deltaY * unit;
+      else nav.scrollLeft += (event.deltaX || event.deltaY) * unit;
+    };
+
+    sidebar.addEventListener("wheel", scrollSidebar, { passive: false });
+    return () => sidebar.removeEventListener("wheel", scrollSidebar);
+  }, []);
+
   const tools = [
     {
       id: "daily-report" as const,
@@ -3216,7 +3239,7 @@ function AppShell({
   return (
     <div className="min-h-screen bg-background text-foreground">
       <Toaster richColors position="top-center" />
-      <aside className="neuro-sidebar app-sidebar fixed z-40 flex h-auto min-h-0 flex-col overflow-hidden rounded-2xl p-2 sm:p-3 lg:inset-y-4 lg:left-4 lg:right-auto lg:w-72">
+      <aside ref={sidebarRef} className="neuro-sidebar app-sidebar fixed z-40 flex h-auto min-h-0 flex-col overflow-hidden rounded-2xl p-2 sm:p-3 lg:inset-y-4 lg:left-4 lg:right-auto lg:w-72">
         <button
           type="button"
           onClick={() => onNavigate(null)}
@@ -3229,7 +3252,7 @@ function AppShell({
           </div>
         </button>
 
-        <nav className="app-sidebar-nav mt-2 flex min-h-0 gap-2 overflow-x-auto pb-1 lg:mt-3 lg:flex-1 lg:flex-col lg:overflow-x-hidden lg:overflow-y-auto lg:pb-0">
+        <nav ref={sidebarNavRef} className="app-sidebar-nav mt-2 flex min-h-0 gap-2 overflow-x-auto pb-1 lg:mt-3 lg:flex-1 lg:flex-col lg:overflow-x-hidden lg:overflow-y-auto lg:pb-0">
           <SidebarButton
             active={!activeModule}
             icon={<Home className="h-4 w-4" />}
