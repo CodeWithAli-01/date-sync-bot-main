@@ -51,7 +51,7 @@ export type SupportLanguage = keyof typeof DAILY_REPORT_HELP;
 
 export function getSupportLanguage(message: string, fallback: SupportLanguage = "english"): SupportLanguage {
   if (/[\u0600-\u06ff]/u.test(message)) return "urdu";
-  if (/\b(kaise|kaisa|kase|kasa|kese|kesay|kaisay|kesy|kaisy|kro|karna|karein|banani|banane|bana|banau|banaye|bna|bnani|bnau|kya|kia|mujhe|muje|mjy|mujhy|chahiye|chaiye|chahye|kahan|kahn|kidhar|kidr|batao|btao|bta|btaein|samjhao|ki|ka|ke|hai|ha|hain|hn|nahi|nhi|nai|nahin|han|haan|ji|shukriya|shukria|shukrya|samajh|samaj|ap|aap|mera|meri|mra|mri|krna|krni|krun|kryn|karo|kron|kasy|kesy)\b/i.test(message)) return "romanUrdu";
+  if (/\b(kaise|kaisa|kase|kasa|kese|kesay|kaisay|kesy|kaisy|kro|karna|karein|banani|banane|bana|banau|banaye|bna|bnani|bnau|kya|kia|mujhe|muje|mjy|mujhy|chahiye|chaiye|chahye|kahan|kahn|kidhar|kidr|batao|btao|bta|btaein|samjhao|ki|ka|ke|hai|ha|hain|hn|nahi|nhi|nai|nahin|han|haan|ji|shukriya|shukria|shukrya|samajh|samaj|ap|aap|mera|meri|mra|mri|krna|krni|krun|kryn|karo|kron|kasy|kesy|hal|haal|ho|hun|hoon|rha|rhi|rhy|rahe|theek|thik|salam|salaam|alaikum|kon|kaun|koun|mn|mein|main|bhi|bi|thk|sari|saari|sb|tamam|samjha|waqt|jaldi|mukhtasar|thora|tora)\b/i.test(message)) return "romanUrdu";
   // Short acknowledgements such as "thanks", "thankx", "yes" and "ok"
   // keep the conversation language rather than switching it to English.
   if (/\b(i|you|your|the|please|how|where|which|what|can|for|need|understand|understood)\b/i.test(message)) return "english";
@@ -60,7 +60,7 @@ export function getSupportLanguage(message: string, fallback: SupportLanguage = 
 
 export function getDailyReportStepHelp(message: string, language: SupportLanguage): string | null {
   const topics: [RegExp, number][] = [
-    [/call\s*log|calllog|mrep|happen(?:ed|d)?|filter|کال\s*لاگ|فلٹر|ہیپنڈ/i, 2],
+    [/call\s*log|calllog|happen(?:ed|d)?|filter|کال\s*لاگ|فلٹر|ہیپنڈ/i, 2],
     [/selfi(?:e|es)?|slefi|slefie|whats\s*app|whatsapp|extension|سیلفی|سیلفیاں|واٹس|ایکسٹینشن/i, 3],
     [/sample|sampl[ey]?|template|columns?|format|نمونہ|سیمپل|کالم|فارمیٹ/i, 1],
     [/preview|download|ڈاؤن\s*لوڈ|پریویو/i, 4],
